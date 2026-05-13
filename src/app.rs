@@ -498,10 +498,10 @@ impl SearchApp {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label("검색어 일치:");
                 ui.label(format!(
-                    "{} 파일 / {} 줄",
+                    "{} 파일 / {} 라인",
                     tab.file_searched, tab.line_searched
                 ));
-                ui.add_space(20.0);
+                ui.add_space(10.0);
                 ui.label("소요시간:");
                 ui.label(format!("{:.3}초", duration.as_secs_f32()));
             });
@@ -526,7 +526,7 @@ impl SearchApp {
                     ui.label("파일");
                 });
                 header.col(|ui| {
-                    ui.label("줄");
+                    ui.label("라인");
                 });
                 header.col(|ui| {
                     let label = match tab.sort_by_modified_asc {
