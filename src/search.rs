@@ -325,12 +325,29 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 let mut entries = Vec::new();
                 // Second pass: scan file content (unless "File name only" mode is on).
                 if !file_name_only {
-                    let sink = SearchSink {
-                        results: &mut entries,
-                        matcher: &matcher,
-                    };
-                    // The actual heavy lifting: disk I/O and regex scanning.
-                    let _ = searcher.search_path(&*matcher, path, sink);
+                    let mut handled = false;
+                    // Korean .eml files often use Quoted-Printable encoding for the body.
+                    if path.extension().is_some_and(|ext| ext == "eml")
+                        && let Ok(content) = std::fs::read(path)
+                        && let Ok(decoded) =
+                            quoted_printable::decode(&content, quoted_printable::ParseMode::Robust)
+                    {
+                        let mut sink = SearchSink {
+                            results: &mut entries,
+                            matcher: &matcher,
+                        };
+                        let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
+                        handled = true;
+                    }
+
+                    if !handled {
+                        let sink = SearchSink {
+                            results: &mut entries,
+                            matcher: &matcher,
+                        };
+                        // The actual heavy lifting: disk I/O and regex scanning.
+                        let _ = searcher.search_path(&*matcher, path, sink);
+                    }
                 }
 
                 // If anything matched (name or content), send it to the UI.

@@ -2134,6 +2134,7 @@ dependencies = [
  "ignore",
  "image",
  "open",
+ "quoted_printable",
  "regex",
  "rfd",
  "tempfile",
@@ -3200,6 +3201,12 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "quoted_printable"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 
 [[package]]
 name = "r-efi"
