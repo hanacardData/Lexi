@@ -449,10 +449,8 @@ impl SearchApp {
                                 }
 
                                 // Add path picker button for the last chip.
-                                if is_last {
-                                    if ui.button("+ 경로 추가").clicked() {
-                                        open_picker = true;
-                                    }
+                                if is_last && ui.button("+ 경로 추가").clicked() {
+                                    open_picker = true;
                                 }
                             });
                         });
