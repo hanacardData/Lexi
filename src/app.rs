@@ -420,39 +420,55 @@ impl SearchApp {
 
         ui.vertical(|ui| {
             // Path chips management.
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal_top(|ui| {
                 ui.label("폴더경로:");
 
-                let mut path_to_remove = None;
-                for (i, path) in tab.config.paths.iter().enumerate() {
-                    ui.scope(|ui| {
-                        // Subtle background for the path chips.
-                        ui.style_mut().visuals.widgets.inactive.bg_fill = ui
-                            .style()
-                            .visuals
-                            .widgets
-                            .active
-                            .bg_fill
-                            .linear_multiply(0.1);
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(path).monospace()))
-                                .on_hover_text(path);
-                            // Safety: cannot remove the last path.
-                            if tab.config.paths.len() > 1 && ui.button("x").clicked() {
-                                path_to_remove = Some(i);
-                            }
+                ui.vertical(|ui| {
+                    let mut path_to_remove = None;
+                    let mut open_picker = false;
+
+                    // Render path chips.
+                    // Each chip is a horizontal row with a path label and an optional remove button.
+                    let paths_count = tab.config.paths.len();
+                    for (i, path) in tab.config.paths.iter().enumerate() {
+                        let is_last = i == paths_count - 1;
+
+                        ui.scope(|ui| {
+                            ui.style_mut().visuals.widgets.inactive.bg_fill = ui
+                                .style()
+                                .visuals
+                                .widgets
+                                .active
+                                .bg_fill
+                                .linear_multiply(0.1);
+
+                            ui.horizontal(|ui| {
+                                ui.monospace(path).on_hover_text(path);
+                                if paths_count > 1 && ui.small_button("x").clicked() {
+                                    path_to_remove = Some(i);
+                                }
+
+                                // Add path picker button for the last chip.
+                                if is_last {
+                                    if ui.button("+ 경로 추가").clicked() {
+                                        open_picker = true;
+                                    }
+                                }
+                            });
                         });
-                    });
-                }
+                    }
 
-                if let Some(i) = path_to_remove {
-                    tab.config.paths.remove(i);
-                    input_changed = true;
-                }
+                    // Remove path chip.
+                    if let Some(i) = path_to_remove {
+                        tab.config.paths.remove(i);
+                        input_changed = true;
+                    }
 
-                if ui.button("+ 경로 추가").clicked() && Self::pick_paths(&mut tab.config) {
-                    input_changed = true;
-                }
+                    // Add path picker.
+                    if open_picker && Self::pick_paths(&mut tab.config) {
+                        input_changed = true;
+                    }
+                });
             });
 
             ui.add_space(5.0);
