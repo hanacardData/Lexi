@@ -85,10 +85,24 @@ impl searcher::Sink for SearchSink<'_, '_> {
         let (display_text, display_matches) = if bytes.len() > MAX_LINE_LENGTH {
             if let Some(&(m_start, _)) = all_matches.first() {
                 // Calculate a window around the first match.
-                let window_start = m_start.saturating_sub(MAX_LINE_LENGTH / 2);
-                let window_end = (window_start + MAX_LINE_LENGTH).min(bytes.len());
-                let window_start = window_end.saturating_sub(MAX_LINE_LENGTH);
+                let mut window_start = m_start.saturating_sub(MAX_LINE_LENGTH / 2);
+                let mut window_end = (window_start + MAX_LINE_LENGTH).min(bytes.len());
+                window_start = window_end.saturating_sub(MAX_LINE_LENGTH);
 
+                // Ensure the window starts on a character boundary.
+                while window_start > 0 && (bytes[window_start] & 0xC0) == 0x80 {
+                    window_start -= 1;
+                }
+
+                // Ensure the window ends on a character boundary.
+                while window_end > 0
+                    && window_end < bytes.len()
+                    && (bytes[window_end] & 0xC0) == 0x80
+                {
+                    window_end -= 1;
+                }
+
+                // Truncate the window to fit within MAX_LINE_LENGTH, preserving character boundaries.
                 let mut truncated = String::new();
                 if window_start > 0 {
                     truncated.push_str("...");
@@ -108,7 +122,11 @@ impl searcher::Sink for SearchSink<'_, '_> {
                 (truncated.into(), shifted_matches.into())
             } else {
                 // Fallback if a match is found but find_at fails.
-                let mut truncated = String::from_utf8_lossy(&bytes[..MAX_LINE_LENGTH]).into_owned();
+                let mut end = MAX_LINE_LENGTH.min(bytes.len());
+                while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+                    end -= 1;
+                }
+                let mut truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
                 truncated.push_str("...");
                 (truncated.into(), Vec::new().into())
             }
