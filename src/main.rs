@@ -11,9 +11,9 @@ use lexi::app::SearchApp;
 /// This ensures that the UI doesn't show broken boxes for Korean text.
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+
     // Path to the default Korean font on Windows.
     let font_path = "C:\\Windows\\Fonts\\malgun.ttf";
-
     if let Ok(data) = std::fs::read(font_path) {
         // Embed the font data into the context.
         fonts.font_data.insert(

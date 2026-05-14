@@ -211,15 +211,10 @@ pub struct SearchConfig {
 }
 
 impl SearchConfig {
-    /// Helper to convert raw strings (from CLI or legacy inputs) into a proper config.
-    pub fn with_paths_and_patterns(paths: String, patterns: String) -> Self {
-        let paths_vec = paths
-            .split(';')
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
+    // Creates a new search config with the given paths and patterns.
+    pub fn new(paths: Vec<String>, patterns: String) -> Self {
         Self {
-            paths: paths_vec,
+            paths,
             patterns,
             queries: vec![SearchQuery::new()],
             file_name_only: false,

@@ -1,7 +1,9 @@
-use lexi::search::{SearchConfig, spawn_search};
 use std::fs::File;
 use std::io::Write;
+
 use tempfile::tempdir;
+
+use lexi::search::{SearchConfig, spawn_search};
 
 #[test]
 fn test_search_filename() {
@@ -9,8 +11,8 @@ fn test_search_filename() {
     let file_path = dir.path().join("test_file.txt");
     File::create(&file_path).unwrap();
 
-    let mut config = SearchConfig::with_paths_and_patterns(
-        dir.path().to_string_lossy().to_string(),
+    let mut config = SearchConfig::new(
+        vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
     config.queries[0].query = "test_file".to_string();
@@ -46,8 +48,8 @@ fn test_search_content() {
     writeln!(file, "Hello World").unwrap();
     writeln!(file, "Rust is awesome").unwrap();
 
-    let mut config = SearchConfig::with_paths_and_patterns(
-        dir.path().to_string_lossy().to_string(),
+    let mut config = SearchConfig::new(
+        vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
     config.queries[0].query = "Rust".to_string();
@@ -83,8 +85,8 @@ fn test_search_ignore_case() {
     let mut file = File::create(&file_path).unwrap();
     writeln!(file, "CASE INSENSITIVE").unwrap();
 
-    let mut config = SearchConfig::with_paths_and_patterns(
-        dir.path().to_string_lossy().to_string(),
+    let mut config = SearchConfig::new(
+        vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
     config.queries[0].query = "case".to_string();
@@ -114,8 +116,8 @@ fn test_search_korean_utf8() {
     let mut file = File::create(&file_path).unwrap();
     writeln!(file, "안녕하세요").unwrap();
 
-    let mut config = SearchConfig::with_paths_and_patterns(
-        dir.path().to_string_lossy().to_string(),
+    let mut config = SearchConfig::new(
+        vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
     config.queries[0].query = "안녕".to_string();
@@ -149,8 +151,8 @@ fn test_search_korean_qp_eml() {
     let qp_content = "=EC=95=88=EB=85=95\r\n";
     file.write_all(qp_content.as_bytes()).unwrap();
 
-    let mut config = SearchConfig::with_paths_and_patterns(
-        dir.path().to_string_lossy().to_string(),
+    let mut config = SearchConfig::new(
+        vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
     config.queries[0].query = "안녕".to_string();

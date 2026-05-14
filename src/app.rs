@@ -9,7 +9,7 @@ use egui::UiKind;
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 
-use crate::search::*;
+use crate::search::{PendingSearch, SearchConfig, SearchResult};
 
 /// Main state for the entire application.
 pub struct SearchApp {
@@ -40,27 +40,6 @@ pub struct UiSearchEntry {
     pub line_number: u64,
     /// The UI layout for the matched line (or path if it's a filename-only match).
     pub layout: egui::text::LayoutJob,
-}
-
-/// Represents a single search tab's state.
-pub struct SearchTab {
-    /// The specific configuration for this tab (paths, queries, filters).
-    config: SearchConfig,
-    /// The accumulated results for this tab.
-    results: Vec<UiSearchEntry>,
-    /// Handle to the active background search worker.
-    pending_search: Option<PendingSearch>,
-    /// Counters for UI statistics.
-    file_searched: usize,
-    line_searched: usize,
-    /// How long the search took (or has been taking).
-    search_duration: Duration,
-    /// Any critical error to show to the user.
-    error_message: Option<String>,
-    /// Used for debouncing (prevents searching on every single keystroke).
-    last_input_time: Option<Instant>,
-    /// Sorting state.
-    sort_by_modified_asc: bool,
 }
 
 impl UiSearchEntry {
@@ -145,6 +124,27 @@ impl UiSearchEntry {
     }
 }
 
+/// Represents a single search tab's state.
+pub struct SearchTab {
+    /// The specific configuration for this tab (paths, queries, filters).
+    config: SearchConfig,
+    /// The accumulated results for this tab.
+    results: Vec<UiSearchEntry>,
+    /// Handle to the active background search worker.
+    pending_search: Option<PendingSearch>,
+    /// Counters for UI statistics.
+    file_searched: usize,
+    line_searched: usize,
+    /// How long the search took (or has been taking).
+    search_duration: Duration,
+    /// Any critical error to show to the user.
+    error_message: Option<String>,
+    /// Used for debouncing (prevents searching on every single keystroke).
+    last_input_time: Option<Instant>,
+    /// Sorting state.
+    sort_by_modified_asc: bool,
+}
+
 impl Default for SearchTab {
     fn default() -> Self {
         Self {
@@ -163,9 +163,9 @@ impl Default for SearchTab {
 
 impl SearchTab {
     /// Creates a new search tab with the given context and patterns.
-    pub fn from_context(context: String, patterns: String) -> Self {
+    pub fn from_context(context: Vec<String>, patterns: String) -> Self {
         Self {
-            config: SearchConfig::with_paths_and_patterns(context, patterns),
+            config: SearchConfig::new(context, patterns),
             ..Self::default()
         }
     }
@@ -332,7 +332,7 @@ impl Default for SearchApp {
 impl SearchApp {
     pub fn new() -> Self {
         Self {
-            tabs: vec![SearchTab::from_context(Self::cwd(), String::new())],
+            tabs: vec![SearchTab::from_context(vec![Self::cwd()], String::new())],
             selected_tab_index: 0,
         }
     }
@@ -407,7 +407,7 @@ impl SearchApp {
             });
             if ui.button("+ 새 탭").on_hover_text("새 탭").clicked() {
                 self.tabs
-                    .push(SearchTab::from_context(Self::cwd(), String::new()));
+                    .push(SearchTab::from_context(vec![Self::cwd()], String::new()));
                 self.selected_tab_index = self.tabs.len() - 1;
             }
         });
