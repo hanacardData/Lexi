@@ -82,30 +82,66 @@ impl UiSearchEntry {
             // Highlight matched regions in red.
             let mut printed_idx = 0;
             for (start, end) in matches.iter().copied() {
+                // Ensure indices are within bounds and on character boundaries.
+                let start = start.min(text.len());
+                let end = end.min(text.len());
+
                 if printed_idx < start {
+                    let part = Self::get_safe_slice(text, printed_idx, start);
+                    if !part.is_empty() {
+                        job.append(
+                            part,
+                            0.0,
+                            egui::TextFormat::simple(font_id.clone(), default_color),
+                        );
+                    }
+                }
+
+                let matched_part = Self::get_safe_slice(text, start, end);
+                if !matched_part.is_empty() {
                     job.append(
-                        &text[printed_idx..start],
+                        matched_part,
                         0.0,
-                        egui::TextFormat::simple(font_id.clone(), default_color),
+                        egui::TextFormat::simple(font_id.clone(), match_color),
                     );
                 }
-                job.append(
-                    &text[start..end],
-                    0.0,
-                    egui::TextFormat::simple(font_id.clone(), match_color),
-                );
                 printed_idx = end;
             }
             // Print any remaining text after the last match.
             if printed_idx < text.len() {
-                job.append(
-                    &text[printed_idx..],
-                    0.0,
-                    egui::TextFormat::simple(font_id, default_color),
-                );
+                let part = Self::get_safe_slice(text, printed_idx, text.len());
+                if !part.is_empty() {
+                    job.append(part, 0.0, egui::TextFormat::simple(font_id, default_color));
+                }
             }
         }
         job
+    }
+
+    /// Helper to safely slice a string at byte offsets, ensuring character boundaries.
+    fn get_safe_slice(text: &str, start: usize, end: usize) -> &str {
+        if start >= end || start >= text.len() {
+            return "";
+        }
+        let end = end.min(text.len());
+
+        // Find the nearest character boundaries.
+        let mut actual_start = start;
+        while actual_start > 0 && !text.is_char_boundary(actual_start) {
+            actual_start -= 1;
+        }
+
+        let mut actual_end = end;
+        while actual_end < text.len() && !text.is_char_boundary(actual_end) {
+            actual_end += 1;
+        }
+
+        // Final safety check.
+        if actual_start < actual_end && actual_end <= text.len() {
+            &text[actual_start..actual_end]
+        } else {
+            ""
+        }
     }
 }
 

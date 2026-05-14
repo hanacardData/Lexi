@@ -47,20 +47,25 @@ fn main() -> eframe::Result {
     // Load the icon from memory (embedded at compile time)
     let icon_data = include_bytes!("../assets/icon.png");
     let icon = image::load_from_memory(icon_data)
-        .expect("Failed to load icon")
-        .to_rgba8();
-    let (width, height) = icon.dimensions();
+        .ok()
+        .map(|i| i.to_rgba8());
 
     // Configure the main window options.
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1024.0, 768.0])
+        .with_title("Lexi");
+
+    if let Some(icon) = icon {
+        let (width, height) = icon.dimensions();
+        viewport = viewport.with_icon(egui::IconData {
+            rgba: icon.into_raw(),
+            width,
+            height,
+        });
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1024.0, 768.0])
-            .with_title("Lexi")
-            .with_icon(egui::IconData {
-                rgba: icon.into_raw(),
-                width,
-                height,
-            }),
+        viewport,
         ..Default::default()
     };
 

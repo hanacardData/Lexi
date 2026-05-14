@@ -123,7 +123,7 @@ impl searcher::Sink for SearchSink<'_, '_> {
             } else {
                 // Fallback if a match is found but find_at fails.
                 let mut end = MAX_LINE_LENGTH.min(bytes.len());
-                while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+                while end > 0 && end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
                     end -= 1;
                 }
                 let mut truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
