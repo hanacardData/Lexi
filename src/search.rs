@@ -48,7 +48,7 @@ pub struct SearchResult {
 pub struct SearchError;
 impl searcher::SinkError for SearchError {
     fn error_message<T: std::fmt::Display>(message: T) -> Self {
-        eprintln!("Search Sink Error: {}", message);
+        log::error!("Search Sink Error: {}", message);
         Self
     }
 }

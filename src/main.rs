@@ -6,6 +6,7 @@
 use eframe::egui;
 
 use lexi::app::SearchApp;
+use lexi::setup_logging;
 
 /// Tries to load Malgun Gothic (Standard Windows Korean font).
 /// This ensures that the UI doesn't show broken boxes for Korean text.
@@ -37,13 +38,15 @@ fn setup_custom_fonts(ctx: &egui::Context) {
         ctx.set_fonts(fonts);
     } else {
         // Log a warning if the font is missing, though most Windows installs will have it.
-        eprintln!(
-            "Warning: No Korean font found on this system. Korean characters may not display correctly."
+        log::warn!(
+            "No Korean font found on this system. Korean characters may not display correctly."
         );
     }
 }
 
 fn main() -> eframe::Result {
+    setup_logging();
+
     // Load the icon from memory (embedded at compile time)
     let icon_data = include_bytes!("../assets/icon.png");
     let icon = image::load_from_memory(icon_data)
