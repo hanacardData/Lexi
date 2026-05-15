@@ -9,7 +9,7 @@ use egui::UiKind;
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 
-use crate::search::*;
+use crate::search::{PendingSearch, SearchConfig, SearchResult};
 
 /// Main state for the entire application.
 pub struct SearchApp {
@@ -42,6 +42,88 @@ pub struct UiSearchEntry {
     pub layout: egui::text::LayoutJob,
 }
 
+impl UiSearchEntry {
+    /// Creates a rich-text layout job for egui.
+    /// This handles the red highlighting for search term matches.
+    fn create_layout(
+        ui: &egui::Ui,
+        text: &str,
+        matches: &[(usize, usize)],
+    ) -> egui::text::LayoutJob {
+        let mut job = egui::text::LayoutJob::default();
+        let default_color = ui.style().visuals.text_color();
+        let match_color = egui::Color32::RED;
+        let font_id = egui::FontId::default();
+
+        if matches.is_empty() {
+            job.append(text, 0.0, egui::TextFormat::simple(font_id, default_color));
+        } else {
+            // Highlight matched regions in red.
+            let mut printed_idx = 0;
+            for (start, end) in matches.iter().copied() {
+                // Ensure indices are within bounds and on character boundaries.
+                let start = start.min(text.len());
+                let end = end.min(text.len());
+
+                if printed_idx < start {
+                    let part = Self::get_safe_slice(text, printed_idx, start);
+                    if !part.is_empty() {
+                        job.append(
+                            part,
+                            0.0,
+                            egui::TextFormat::simple(font_id.clone(), default_color),
+                        );
+                    }
+                }
+
+                let matched_part = Self::get_safe_slice(text, start, end);
+                if !matched_part.is_empty() {
+                    job.append(
+                        matched_part,
+                        0.0,
+                        egui::TextFormat::simple(font_id.clone(), match_color),
+                    );
+                }
+                printed_idx = end;
+            }
+            // Print any remaining text after the last match.
+            if printed_idx < text.len() {
+                let part = Self::get_safe_slice(text, printed_idx, text.len());
+                if !part.is_empty() {
+                    job.append(part, 0.0, egui::TextFormat::simple(font_id, default_color));
+                }
+            }
+        }
+        job
+    }
+
+    /// Helper to safely slice a string at byte offsets, ensuring character boundaries.
+    fn get_safe_slice(text: &str, start: usize, end: usize) -> &str {
+        if start >= end || start >= text.len() {
+            return "";
+        }
+        let end = end.min(text.len());
+
+        // Find the nearest character boundaries.
+        let mut actual_start = start;
+        while actual_start > 0 && !text.is_char_boundary(actual_start) {
+            actual_start -= 1;
+        }
+
+        let mut actual_end = end;
+        while actual_end < text.len() && !text.is_char_boundary(actual_end) {
+            actual_end += 1;
+        }
+
+        // Final safety check.
+        if actual_start < actual_end && actual_end <= text.len() {
+            &text[actual_start..actual_end]
+        } else {
+            ""
+        }
+    }
+}
+
 /// Represents a single search tab's state.
 pub struct SearchTab {
     /// The specific configuration for this tab (paths, queries, filters).
@@ -63,52 +145,6 @@ pub struct SearchTab {
     sort_by_modified_asc: bool,
 }
 
-impl UiSearchEntry {
-    /// Creates a rich-text layout job for egui.
-    /// This handles the red highlighting for search term matches.
-    fn create_layout(
-        ui: &egui::Ui,
-        text: &str,
-        matches: &[(usize, usize)],
-    ) -> egui::text::LayoutJob {
-        let mut job = egui::text::LayoutJob::default();
-        let default_color = ui.style().visuals.text_color();
-        let match_color = egui::Color32::RED;
-        let font_id = egui::FontId::default();
-
-        if matches.is_empty() {
-            job.append(text, 0.0, egui::TextFormat::simple(font_id, default_color));
-        } else {
-            // Highlight matched regions in red.
-            let mut printed_idx = 0;
-            for (start, end) in matches.iter().copied() {
-                if printed_idx < start {
-                    job.append(
-                        &text[printed_idx..start],
-                        0.0,
-                        egui::TextFormat::simple(font_id.clone(), default_color),
-                    );
-                }
-                job.append(
-                    &text[start..end],
-                    0.0,
-                    egui::TextFormat::simple(font_id.clone(), match_color),
-                );
-                printed_idx = end;
-            }
-            // Print any remaining text after the last match.
-            if printed_idx < text.len() {
-                job.append(
-                    &text[printed_idx..],
-                    0.0,
-                    egui::TextFormat::simple(font_id, default_color),
-                );
-            }
-        }
-        job
-    }
-}
-
 impl Default for SearchTab {
     fn default() -> Self {
         Self {
@@ -127,9 +163,9 @@ impl Default for SearchTab {
 
 impl SearchTab {
     /// Creates a new search tab with the given context and patterns.
-    pub fn from_context(context: String, patterns: String) -> Self {
+    pub fn from_context(context: Vec<String>, patterns: String) -> Self {
         Self {
-            config: SearchConfig::with_paths_and_patterns(context, patterns),
+            config: SearchConfig::new(context, patterns),
             ..Self::default()
         }
     }
@@ -296,7 +332,7 @@ impl Default for SearchApp {
 impl SearchApp {
     pub fn new() -> Self {
         Self {
-            tabs: vec![SearchTab::from_context(Self::cwd(), String::new())],
+            tabs: vec![SearchTab::from_context(vec![Self::cwd()], String::new())],
             selected_tab_index: 0,
         }
     }
@@ -371,7 +407,7 @@ impl SearchApp {
             });
             if ui.button("+ 새 탭").on_hover_text("새 탭").clicked() {
                 self.tabs
-                    .push(SearchTab::from_context(Self::cwd(), String::new()));
+                    .push(SearchTab::from_context(vec![Self::cwd()], String::new()));
                 self.selected_tab_index = self.tabs.len() - 1;
             }
         });
@@ -384,39 +420,53 @@ impl SearchApp {
 
         ui.vertical(|ui| {
             // Path chips management.
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal_top(|ui| {
                 ui.label("폴더경로:");
 
-                let mut path_to_remove = None;
-                for (i, path) in tab.config.paths.iter().enumerate() {
-                    ui.scope(|ui| {
-                        // Subtle background for the path chips.
-                        ui.style_mut().visuals.widgets.inactive.bg_fill = ui
-                            .style()
-                            .visuals
-                            .widgets
-                            .active
-                            .bg_fill
-                            .linear_multiply(0.1);
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(path).monospace()))
-                                .on_hover_text(path);
-                            // Safety: cannot remove the last path.
-                            if tab.config.paths.len() > 1 && ui.button("x").clicked() {
-                                path_to_remove = Some(i);
-                            }
+                ui.vertical(|ui| {
+                    let mut path_to_remove = None;
+                    let mut open_picker = false;
+
+                    // Render path chips.
+                    // Each chip is a horizontal row with a path label and an optional remove button.
+                    let paths_count = tab.config.paths.len();
+                    for (i, path) in tab.config.paths.iter().enumerate() {
+                        let is_last = i == paths_count - 1;
+
+                        ui.scope(|ui| {
+                            ui.style_mut().visuals.widgets.inactive.bg_fill = ui
+                                .style()
+                                .visuals
+                                .widgets
+                                .active
+                                .bg_fill
+                                .linear_multiply(0.1);
+
+                            ui.horizontal(|ui| {
+                                ui.monospace(path).on_hover_text(path);
+                                if paths_count > 1 && ui.small_button("x").clicked() {
+                                    path_to_remove = Some(i);
+                                }
+
+                                // Add path picker button for the last chip.
+                                if is_last && ui.button("+ 경로 추가").clicked() {
+                                    open_picker = true;
+                                }
+                            });
                         });
-                    });
-                }
+                    }
 
-                if let Some(i) = path_to_remove {
-                    tab.config.paths.remove(i);
-                    input_changed = true;
-                }
+                    // Remove path chip.
+                    if let Some(i) = path_to_remove {
+                        tab.config.paths.remove(i);
+                        input_changed = true;
+                    }
 
-                if ui.button("+ 경로 추가").clicked() && Self::pick_paths(&mut tab.config) {
-                    input_changed = true;
-                }
+                    // Add path picker.
+                    if open_picker && Self::pick_paths(&mut tab.config) {
+                        input_changed = true;
+                    }
+                });
             });
 
             ui.add_space(5.0);
@@ -498,10 +548,10 @@ impl SearchApp {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label("검색어 일치:");
                 ui.label(format!(
-                    "{} 파일 / {} 줄",
+                    "{} 파일 / {} 라인",
                     tab.file_searched, tab.line_searched
                 ));
-                ui.add_space(20.0);
+                ui.add_space(10.0);
                 ui.label("소요시간:");
                 ui.label(format!("{:.3}초", duration.as_secs_f32()));
             });
@@ -526,7 +576,7 @@ impl SearchApp {
                     ui.label("파일");
                 });
                 header.col(|ui| {
-                    ui.label("줄");
+                    ui.label("라인");
                 });
                 header.col(|ui| {
                     let label = match tab.sort_by_modified_asc {

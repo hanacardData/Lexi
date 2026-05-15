@@ -48,7 +48,7 @@ pub struct SearchResult {
 pub struct SearchError;
 impl searcher::SinkError for SearchError {
     fn error_message<T: std::fmt::Display>(message: T) -> Self {
-        eprintln!("Search Sink Error: {}", message);
+        log::error!("Search Sink Error: {}", message);
         Self
     }
 }
@@ -85,10 +85,24 @@ impl searcher::Sink for SearchSink<'_, '_> {
         let (display_text, display_matches) = if bytes.len() > MAX_LINE_LENGTH {
             if let Some(&(m_start, _)) = all_matches.first() {
                 // Calculate a window around the first match.
-                let window_start = m_start.saturating_sub(MAX_LINE_LENGTH / 2);
-                let window_end = (window_start + MAX_LINE_LENGTH).min(bytes.len());
-                let window_start = window_end.saturating_sub(MAX_LINE_LENGTH);
+                let mut window_start = m_start.saturating_sub(MAX_LINE_LENGTH / 2);
+                let mut window_end = (window_start + MAX_LINE_LENGTH).min(bytes.len());
+                window_start = window_end.saturating_sub(MAX_LINE_LENGTH);
 
+                // Ensure the window starts on a character boundary.
+                while window_start > 0 && (bytes[window_start] & 0xC0) == 0x80 {
+                    window_start -= 1;
+                }
+
+                // Ensure the window ends on a character boundary.
+                while window_end > 0
+                    && window_end < bytes.len()
+                    && (bytes[window_end] & 0xC0) == 0x80
+                {
+                    window_end -= 1;
+                }
+
+                // Truncate the window to fit within MAX_LINE_LENGTH, preserving character boundaries.
                 let mut truncated = String::new();
                 if window_start > 0 {
                     truncated.push_str("...");
@@ -108,7 +122,11 @@ impl searcher::Sink for SearchSink<'_, '_> {
                 (truncated.into(), shifted_matches.into())
             } else {
                 // Fallback if a match is found but find_at fails.
-                let mut truncated = String::from_utf8_lossy(&bytes[..MAX_LINE_LENGTH]).into_owned();
+                let mut end = MAX_LINE_LENGTH.min(bytes.len());
+                while end > 0 && end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
+                    end -= 1;
+                }
+                let mut truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
                 truncated.push_str("...");
                 (truncated.into(), Vec::new().into())
             }
@@ -193,15 +211,10 @@ pub struct SearchConfig {
 }
 
 impl SearchConfig {
-    /// Helper to convert raw strings (from CLI or legacy inputs) into a proper config.
-    pub fn with_paths_and_patterns(paths: String, patterns: String) -> Self {
-        let paths_vec = paths
-            .split(';')
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
+    // Creates a new search config with the given paths and patterns.
+    pub fn new(paths: Vec<String>, patterns: String) -> Self {
         Self {
-            paths: paths_vec,
+            paths,
             patterns,
             queries: vec![SearchQuery::new()],
             file_name_only: false,
@@ -325,12 +338,29 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 let mut entries = Vec::new();
                 // Second pass: scan file content (unless "File name only" mode is on).
                 if !file_name_only {
-                    let sink = SearchSink {
-                        results: &mut entries,
-                        matcher: &matcher,
-                    };
-                    // The actual heavy lifting: disk I/O and regex scanning.
-                    let _ = searcher.search_path(&*matcher, path, sink);
+                    let mut handled = false;
+                    // Korean .eml files often use Quoted-Printable encoding for the body.
+                    if path.extension().is_some_and(|ext| ext == "eml")
+                        && let Ok(content) = std::fs::read(path)
+                        && let Ok(decoded) =
+                            quoted_printable::decode(&content, quoted_printable::ParseMode::Robust)
+                    {
+                        let mut sink = SearchSink {
+                            results: &mut entries,
+                            matcher: &matcher,
+                        };
+                        let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
+                        handled = true;
+                    }
+
+                    if !handled {
+                        let sink = SearchSink {
+                            results: &mut entries,
+                            matcher: &matcher,
+                        };
+                        // The actual heavy lifting: disk I/O and regex scanning.
+                        let _ = searcher.search_path(&*matcher, path, sink);
+                    }
                 }
 
                 // If anything matched (name or content), send it to the UI.
