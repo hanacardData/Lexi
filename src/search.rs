@@ -208,6 +208,7 @@ pub struct SearchConfig {
     pub patterns: String,
     pub queries: Vec<SearchQuery>,
     pub file_name_only: bool,
+    pub search_doc_content: bool,
 }
 
 impl SearchConfig {
@@ -218,6 +219,7 @@ impl SearchConfig {
             patterns,
             queries: vec![SearchQuery::new()],
             file_name_only: false,
+            search_doc_content: false,
         }
     }
 
@@ -228,16 +230,25 @@ impl SearchConfig {
 
     /// Parses the pattern string (e.g., "*.rs *.md") into a glob override object.
     pub fn overrides(&self) -> Override {
-        if self.patterns.is_empty() {
-            Override::empty()
-        } else {
-            let mut builder = OverrideBuilder::new(
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            );
-            for glob in self.patterns.split_whitespace() {
+        let mut builder = OverrideBuilder::new(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+        let mut final_patterns = self.patterns.clone();
+        if self.search_doc_content {
+            let doc_patterns = "*.docx *.pptx *.xlsx *.pdf *.doc *.ppt *.xls *.eml";
+            if final_patterns.is_empty() {
+                final_patterns = doc_patterns.to_string();
+            } else {
+                final_patterns = format!("{} {}", final_patterns, doc_patterns);
+            }
+        }
+        if !final_patterns.is_empty() {
+            for glob in final_patterns.split_whitespace() {
                 let _ = builder.add(glob);
             }
             builder.build().unwrap_or_else(|_| Override::empty())
+        } else {
+            Override::empty()
         }
     }
 
@@ -273,6 +284,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
     // Create variables for the search configuration.
     let matcher = config.create_matcher()?;
     let file_name_only = config.file_name_only;
+    let search_doc_content = config.search_doc_content;
     let paths = config.paths();
     if paths.is_empty() {
         bail!("No search paths provided");
@@ -339,18 +351,69 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 // Second pass: scan file content (unless "File name only" mode is on).
                 if !file_name_only {
                     let mut handled = false;
-                    // Korean .eml files often use Quoted-Printable encoding for the body.
-                    if path.extension().is_some_and(|ext| ext == "eml")
-                        && let Ok(content) = std::fs::read(path)
-                        && let Ok(decoded) =
-                            quoted_printable::decode(&content, quoted_printable::ParseMode::Robust)
-                    {
-                        let mut sink = SearchSink {
-                            results: &mut entries,
-                            matcher: &matcher,
-                        };
-                        let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
-                        handled = true;
+                    let extension = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+
+                    if search_doc_content {
+                        match extension.as_str() {
+                            "docx" | "pptx" | "xlsx" | "doc" | "ppt" | "xls" => {
+                                if let Ok(text) = office_oxide::extract_text(path) {
+                                    let mut sink = SearchSink {
+                                        results: &mut entries,
+                                        matcher: &matcher,
+                                    };
+                                    let _ = searcher.search_slice(
+                                        &*matcher,
+                                        text.as_bytes(),
+                                        &mut sink,
+                                    );
+                                    handled = true;
+                                }
+                            }
+                            "pdf" => {
+                                if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
+                                    let mut full_pdf_text = String::new();
+                                    let mut page = 0;
+                                    while let Ok(page_text) = doc.extract_text(page) {
+                                        full_pdf_text.push_str(&page_text);
+                                        full_pdf_text.push('\n');
+                                        page += 1;
+                                    }
+                                    if !full_pdf_text.is_empty() {
+                                        let mut sink = SearchSink {
+                                            results: &mut entries,
+                                            matcher: &matcher,
+                                        };
+                                        let _ = searcher.search_slice(
+                                            &*matcher,
+                                            full_pdf_text.as_bytes(),
+                                            &mut sink,
+                                        );
+                                        handled = true;
+                                    }
+                                }
+                            }
+                            // Korean .eml files often use Quoted-Printable encoding for the body.
+                            "eml" => {
+                                if let Ok(content) = std::fs::read(path)
+                                    && let Ok(decoded) = quoted_printable::decode(
+                                        &content,
+                                        quoted_printable::ParseMode::Robust,
+                                    )
+                                {
+                                    let mut sink = SearchSink {
+                                        results: &mut entries,
+                                        matcher: &matcher,
+                                    };
+                                    let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
+                                    handled = true;
+                                }
+                            }
+                            _ => {}
+                        }
                     }
 
                     if !handled {

@@ -491,6 +491,12 @@ impl SearchApp {
                 {
                     input_changed = true;
                 }
+                if ui
+                    .checkbox(&mut tab.config.search_doc_content, "문서 내부 검색")
+                    .changed()
+                {
+                    input_changed = true;
+                }
             });
 
             ui.add_space(5.0);
