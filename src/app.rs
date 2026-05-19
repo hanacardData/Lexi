@@ -486,13 +486,13 @@ impl SearchApp {
                     input_changed = true;
                 }
                 if ui
-                    .checkbox(&mut tab.config.file_name_only, "파일명만 검색")
+                    .checkbox(&mut tab.config.file_name_only, "파일명만")
                     .changed()
                 {
                     input_changed = true;
                 }
                 if ui
-                    .checkbox(&mut tab.config.search_doc_content, "문서 내부 검색")
+                    .checkbox(&mut tab.config.search_doc_content, "문서내용도")
                     .changed()
                 {
                     input_changed = true;
