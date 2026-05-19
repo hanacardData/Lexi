@@ -230,25 +230,16 @@ impl SearchConfig {
 
     /// Parses the pattern string (e.g., "*.rs *.md") into a glob override object.
     pub fn overrides(&self) -> Override {
-        let mut builder = OverrideBuilder::new(
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        );
-        let mut final_patterns = self.patterns.clone();
-        if self.search_doc_content {
-            let doc_patterns = "*.docx *.pptx *.xlsx *.pdf *.doc *.ppt *.xls *.eml";
-            if final_patterns.is_empty() {
-                final_patterns = doc_patterns.to_string();
-            } else {
-                final_patterns = format!("{} {}", final_patterns, doc_patterns);
-            }
-        }
-        if !final_patterns.is_empty() {
-            for glob in final_patterns.split_whitespace() {
+        if self.patterns.is_empty() {
+            Override::empty()
+        } else {
+            let mut builder = OverrideBuilder::new(
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
+            for glob in self.patterns.split_whitespace() {
                 let _ = builder.add(glob);
             }
             builder.build().unwrap_or_else(|_| Override::empty())
-        } else {
-            Override::empty()
         }
     }
 

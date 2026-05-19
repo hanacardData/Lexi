@@ -579,7 +579,7 @@ impl SearchApp {
             .column(Column::remainder().clip(true))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.label("파일");
+                    ui.label("파일명");
                 });
                 header.col(|ui| {
                     ui.label("라인");
