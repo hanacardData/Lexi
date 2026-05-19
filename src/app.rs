@@ -490,12 +490,18 @@ impl SearchApp {
                     .changed()
                 {
                     input_changed = true;
+                    if tab.config.file_name_only {
+                        tab.config.search_doc_content = false;
+                    }
                 }
                 if ui
                     .checkbox(&mut tab.config.search_doc_content, "문서내용도")
                     .changed()
                 {
                     input_changed = true;
+                    if tab.config.search_doc_content {
+                        tab.config.file_name_only = false;
+                    }
                 }
             });
 
