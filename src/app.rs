@@ -487,6 +487,7 @@ impl SearchApp {
                 }
                 if ui
                     .checkbox(&mut tab.config.file_name_only, "파일명만")
+                    .on_hover_text("파일명만 검색합니다.")
                     .changed()
                 {
                     input_changed = true;
@@ -495,7 +496,8 @@ impl SearchApp {
                     }
                 }
                 if ui
-                    .checkbox(&mut tab.config.search_doc_content, "문서내용도")
+                    .checkbox(&mut tab.config.search_doc_content, "문서 내용도")
+                    .on_hover_text("pdf, docx, pptx, xlsx 내용도 검색합니다.")
                     .changed()
                 {
                     input_changed = true;
