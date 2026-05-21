@@ -212,7 +212,7 @@ pub struct SearchConfig {
 }
 
 impl SearchConfig {
-    // Creates a new search config with the given paths and patterns.
+    /// Creates a new search config with the given paths and patterns.
     pub fn new(paths: Vec<String>, patterns: String) -> Self {
         Self {
             paths,
@@ -387,8 +387,8 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     }
                                 }
                             }
-                            // Korean .eml files often use Quoted-Printable encoding for the body.
                             "eml" => {
+                                // Korean .eml files often use Quoted-Printable encoding for the body.
                                 if let Ok(content) = std::fs::read(path)
                                     && let Ok(decoded) = quoted_printable::decode(
                                         &content,
