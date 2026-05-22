@@ -486,10 +486,24 @@ impl SearchApp {
                     input_changed = true;
                 }
                 if ui
-                    .checkbox(&mut tab.config.file_name_only, "파일명만 검색")
+                    .checkbox(&mut tab.config.file_name_only, "파일명만")
+                    .on_hover_text("파일명만 검색합니다.")
                     .changed()
                 {
                     input_changed = true;
+                    if tab.config.file_name_only {
+                        tab.config.search_doc_content = false;
+                    }
+                }
+                if ui
+                    .checkbox(&mut tab.config.search_doc_content, "문서내용도")
+                    .on_hover_text("pdf, docx, pptx, xlsx 내용도 검색합니다.")
+                    .changed()
+                {
+                    input_changed = true;
+                    if tab.config.search_doc_content {
+                        tab.config.file_name_only = false;
+                    }
                 }
             });
 
@@ -573,7 +587,7 @@ impl SearchApp {
             .column(Column::remainder().clip(true))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.label("파일");
+                    ui.label("파일명");
                 });
                 header.col(|ui| {
                     ui.label("라인");

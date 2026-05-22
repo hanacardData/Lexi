@@ -155,6 +155,7 @@ fn test_search_korean_qp_eml() {
         vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
+    config.search_doc_content = true;
     config.queries[0].query = "안녕".to_string();
 
     let pending = spawn_search(&config).unwrap();
