@@ -9,7 +9,7 @@ use egui::UiKind;
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 
-use crate::search::{PendingSearch, SearchConfig, SearchResult};
+use crate::search::{PendingSearch, SearchConfig, SearchMode, SearchResult};
 
 /// Main state for the entire application.
 pub struct SearchApp {
@@ -496,26 +496,34 @@ impl SearchApp {
                 {
                     input_changed = true;
                 }
-                if ui
-                    .checkbox(&mut tab.config.file_name_only, "파일명만")
-                    .on_hover_text("파일명만 검색합니다.")
-                    .changed()
-                {
-                    input_changed = true;
-                    if tab.config.file_name_only {
-                        tab.config.search_doc_content = false;
-                    }
-                }
-                if ui
-                    .checkbox(&mut tab.config.search_doc_content, "문서내용도")
-                    .on_hover_text("pdf, docx, pptx, xlsx 내용도 검색합니다.")
-                    .changed()
-                {
-                    input_changed = true;
-                    if tab.config.search_doc_content {
-                        tab.config.file_name_only = false;
-                    }
-                }
+
+                let combo_id = ui.id().with("search_mode_combo").with(tab_index);
+                let _ = egui::ComboBox::from_id_salt(combo_id)
+                    .selected_text(tab.config.mode.label())
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        let mut sub_changed = false;
+
+                        sub_changed |= ui.selectable_value(
+                            &mut tab.config.mode,
+                            SearchMode::FileNameOnly,
+                            SearchMode::FileNameOnly.label()
+                        ).changed();
+
+                        sub_changed |= ui.selectable_value(
+                            &mut tab.config.mode,
+                            SearchMode::PathAndContent,
+                            SearchMode::PathAndContent.label()
+                        ).changed();
+
+                        sub_changed |= ui.selectable_value(
+                            &mut tab.config.mode,
+                            SearchMode::IncludeDocContent,
+                            SearchMode::IncludeDocContent.label()
+                        ).changed();
+
+                        sub_changed
+                    });
             });
 
             ui.add_space(5.0);
@@ -525,7 +533,7 @@ impl SearchApp {
             for query in &mut tab.config.queries {
                 ui.horizontal(|ui| {
                     ui.label("검색어: ");
-                    let remaining_width = ui.available_width() - 200.0;
+                    let remaining_width = ui.available_width() - 300.0;
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut query.query)
