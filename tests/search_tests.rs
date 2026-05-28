@@ -3,7 +3,7 @@ use std::io::Write;
 
 use tempfile::tempdir;
 
-use lexi::search::{SearchConfig, spawn_search};
+use lexi::search::{SearchConfig, SearchMode, spawn_search};
 
 #[test]
 fn test_search_filename() {
@@ -155,7 +155,7 @@ fn test_search_korean_qp_eml() {
         vec![dir.path().to_string_lossy().to_string()],
         "".to_string(),
     );
-    config.search_doc_content = true;
+    config.mode = SearchMode::IncludeDocContent;
     config.queries[0].query = "안녕".to_string();
 
     let pending = spawn_search(&config).unwrap();
