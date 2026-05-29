@@ -346,6 +346,23 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
 
                 let entry = match result {
                     Ok(e) if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) => e,
+                    Ok(e) if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) => {
+                        if let Some(path_str) = e.path().to_str() {
+                            let path_lower = path_str.to_lowercase();
+                            if path_lower.contains(":\\windows")
+                                || path_lower.contains("program files")
+                                || path_lower.contains("appdata\\local\\temp")
+                                || path_lower.contains("\\.git")
+                            {
+                                return WalkState::Skip;
+                            }
+                        }
+                        return WalkState::Continue;
+                    }
+                    Err(walk_err) => {
+                        log::warn!("Skipping entry: {}", walk_err);
+                        return WalkState::Continue;
+                    }
                     _ => return WalkState::Continue,
                 };
 
@@ -363,16 +380,28 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
 
                 // Second pass: scan file content (unless "File name only" mode is on).
                 let mut entries = Vec::new();
-                if mode != SearchMode::FileNameOnly {
-                    let mut handled = false;
+                if mode == SearchMode::FileNameOnly {
+                    if !path_matches.is_empty() {
+                        let path_text: Arc<str> = path.to_string_lossy().into();
+                        let _ = tx.send(SearchResult {
+                            path: path_text,
+                            path_matches: path_matches.into(),
+                            entries,
+                            modified_at: None,
+                        });
+                    }
+                    return WalkState::Continue;
+                }
 
-                    if mode == SearchMode::IncludeDocContent
-                        && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                    {
-                        let ext_lower = ext.to_ascii_lowercase();
-                        match ext_lower.as_str() {
-                            "docx" | "xlsx" | "pptx" | "doc" | "ppt" | "xls" => {
-                                if let Ok(text) = office_oxide::extract_text(path) {
+                let mut handled = false;
+                if mode == SearchMode::IncludeDocContent
+                    && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                {
+                    let ext_lower = ext.to_ascii_lowercase();
+                    match ext_lower.as_str() {
+                        "docx" | "xlsx" | "pptx" | "doc" | "ppt" | "xls" => {
+                            match office_oxide::extract_text(path) {
+                                Ok(text) => {
                                     let mut sink = SearchSink {
                                         results: &mut entries,
                                         matcher: &matcher,
@@ -384,58 +413,99 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     );
                                     handled = true;
                                 }
-                            }
-                            "pdf" => {
-                                if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
-                                    let mut full_pdf_text = String::new();
-
-                                    if let Ok(total_pages) = doc.page_count() {
-                                        for page in 0..total_pages {
-                                            if let Ok(page_text) = doc.extract_text(page) {
-                                                full_pdf_text.push_str(&page_text);
-                                                full_pdf_text.push('\n');
-                                            }
-                                        }
-                                    }
-
-                                    let mut sink = SearchSink {
-                                        results: &mut entries,
-                                        matcher: &matcher,
-                                    };
-                                    let _ = searcher.search_slice(
-                                        &*matcher,
-                                        full_pdf_text.as_bytes(),
-                                        &mut sink,
+                                Err(err) => {
+                                    log::warn!(
+                                        "Failed to load DOCX/XLSX/PPTX file: {}, error: {}",
+                                        path.display(),
+                                        err
                                     );
                                     handled = true;
                                 }
                             }
-                            "eml" => {
-                                if let Ok(content) = std::fs::read(path)
-                                    && let Ok(decoded) = quoted_printable::decode(
-                                        &content,
-                                        quoted_printable::ParseMode::Robust,
-                                    )
-                                {
-                                    let mut sink = SearchSink {
-                                        results: &mut entries,
-                                        matcher: &matcher,
-                                    };
-                                    let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
-                                    handled = true;
+                        }
+                        "pdf" => match pdf_oxide::PdfDocument::open(path) {
+                            Ok(doc) => {
+                                let mut full_pdf_text = String::new();
+
+                                if let Ok(total_pages) = doc.page_count() {
+                                    for page in 0..total_pages {
+                                        if let Ok(page_text) = doc.extract_text(page) {
+                                            full_pdf_text.push_str(&page_text);
+                                            full_pdf_text.push('\n');
+                                        }
+                                    }
+                                }
+
+                                let mut sink = SearchSink {
+                                    results: &mut entries,
+                                    matcher: &matcher,
+                                };
+                                let _ = searcher.search_slice(
+                                    &*matcher,
+                                    full_pdf_text.as_bytes(),
+                                    &mut sink,
+                                );
+                                handled = true;
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "Failed to load PDF file: {}, error: {}",
+                                    path.display(),
+                                    err
+                                );
+                                handled = true;
+                            }
+                        },
+                        "eml" => match std::fs::read(path) {
+                            Ok(content) => {
+                                match quoted_printable::decode(
+                                    &content,
+                                    quoted_printable::ParseMode::Robust,
+                                ) {
+                                    Ok(decoded) => {
+                                        let mut sink = SearchSink {
+                                            results: &mut entries,
+                                            matcher: &matcher,
+                                        };
+                                        let _ =
+                                            searcher.search_slice(&*matcher, &decoded, &mut sink);
+                                        handled = true;
+                                    }
+                                    Err(err) => {
+                                        log::warn!(
+                                            "Failed to decode EML file: {}, error: {}",
+                                            path.display(),
+                                            err
+                                        );
+                                        handled = true;
+                                    }
                                 }
                             }
-                            _ => {}
-                        }
+                            Err(err) => {
+                                log::warn!(
+                                    "Failed to load EML file: {}, error: {}",
+                                    path.display(),
+                                    err
+                                );
+                                handled = true;
+                            }
+                        },
+                        _ => {}
                     }
+                }
 
-                    if !handled {
-                        let sink = SearchSink {
-                            results: &mut entries,
-                            matcher: &matcher,
-                        };
-                        // The actual heavy lifting: disk I/O and regex scanning.
-                        let _ = searcher.search_path(&*matcher, path, sink);
+                if !handled {
+                    let sink = SearchSink {
+                        results: &mut entries,
+                        matcher: &matcher,
+                    };
+                    // The actual heavy lifting: disk I/O and regex scanning.
+                    if let Err(search_err) = searcher.search_path(&*matcher, path, sink) {
+                        log::warn!(
+                            "Failed to search path: {}, error: {:?}",
+                            path.display(),
+                            search_err
+                        );
                     }
                 }
 
