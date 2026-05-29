@@ -369,35 +369,35 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                     if mode == SearchMode::IncludeDocContent
                         && let Some(ext) = path.extension().and_then(|e| e.to_str())
                     {
-                        if ext.eq_ignore_ascii_case("docx")
-                            || ext.eq_ignore_ascii_case("xlsx")
-                            || ext.eq_ignore_ascii_case("pptx")
-                            || ext.eq_ignore_ascii_case("doc")
-                            || ext.eq_ignore_ascii_case("ppt")
-                            || ext.eq_ignore_ascii_case("xls")
-                        {
-                            if let Ok(text) = office_oxide::extract_text(path) {
-                                let mut sink = SearchSink {
-                                    results: &mut entries,
-                                    matcher: &matcher,
-                                };
-                                let _ =
-                                    searcher.search_slice(&*matcher, text.as_bytes(), &mut sink);
-                                handled = true;
-                            }
-                        } else if ext.eq_ignore_ascii_case("pdf") {
-                            if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
-                                let mut full_pdf_text = String::new();
-                                let mut page = 0;
-                                while let Ok(page_text) = doc.extract_text(page) {
-                                    if page_text.is_empty() && page > 0 {
-                                        break;
-                                    }
-                                    full_pdf_text.push_str(&page_text);
-                                    full_pdf_text.push('\n');
-                                    page += 1;
+                        let ext_lower = ext.to_ascii_lowercase();
+                        match ext_lower.as_str() {
+                            "docx" | "xlsx" | "pptx" | "doc" | "ppt" | "xls" => {
+                                if let Ok(text) = office_oxide::extract_text(path) {
+                                    let mut sink = SearchSink {
+                                        results: &mut entries,
+                                        matcher: &matcher,
+                                    };
+                                    let _ = searcher.search_slice(
+                                        &*matcher,
+                                        text.as_bytes(),
+                                        &mut sink,
+                                    );
+                                    handled = true;
                                 }
-                                if !full_pdf_text.is_empty() {
+                            }
+                            "pdf" => {
+                                if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
+                                    let mut full_pdf_text = String::new();
+
+                                    if let Ok(total_pages) = doc.page_count() {
+                                        for page in 0..total_pages {
+                                            if let Ok(page_text) = doc.extract_text(page) {
+                                                full_pdf_text.push_str(&page_text);
+                                                full_pdf_text.push('\n');
+                                            }
+                                        }
+                                    }
+
                                     let mut sink = SearchSink {
                                         results: &mut entries,
                                         matcher: &matcher,
@@ -410,19 +410,22 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     handled = true;
                                 }
                             }
-                        } else if ext.eq_ignore_ascii_case("eml")
-                            && let Ok(content) = std::fs::read(path)
-                            && let Ok(decoded) = quoted_printable::decode(
-                                &content,
-                                quoted_printable::ParseMode::Robust,
-                            )
-                        {
-                            let mut sink = SearchSink {
-                                results: &mut entries,
-                                matcher: &matcher,
-                            };
-                            let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
-                            handled = true;
+                            "eml" => {
+                                if let Ok(content) = std::fs::read(path)
+                                    && let Ok(decoded) = quoted_printable::decode(
+                                        &content,
+                                        quoted_printable::ParseMode::Robust,
+                                    )
+                                {
+                                    let mut sink = SearchSink {
+                                        results: &mut entries,
+                                        matcher: &matcher,
+                                    };
+                                    let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
+                                    handled = true;
+                                }
+                            }
+                            _ => {}
                         }
                     }
 
