@@ -498,7 +498,7 @@ impl SearchApp {
                 }
 
                 let combo_id = ui.id().with("search_mode_combo").with(tab_index);
-                let _ = egui::ComboBox::from_id_salt(combo_id)
+                let combo_res = egui::ComboBox::from_id_salt(combo_id)
                     .selected_text(tab.config.mode.label())
                     .width(180.0)
                     .show_ui(ui, |ui| {
@@ -524,6 +524,9 @@ impl SearchApp {
 
                         sub_changed
                     });
+                if let Some(true) = combo_res.inner {
+                    input_changed = true;
+                }
             });
 
             ui.add_space(5.0);
