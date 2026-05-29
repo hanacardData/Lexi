@@ -81,7 +81,7 @@ impl searcher::Sink for SearchSink<'_> {
 
         // Logic for handling extremely long lines (like log files or minified JS).
         // Center the view around the first match to keep the UI snappy.
-        const MAX_LINE_LENGTH: usize = 1024;
+        const MAX_LINE_LENGTH: usize = 256;
         let (display_text, display_matches) = if bytes.len() > MAX_LINE_LENGTH {
             if let Some(&(m_start, _)) = all_matches.first() {
                 // Calculate a window around the first match.
@@ -102,13 +102,19 @@ impl searcher::Sink for SearchSink<'_> {
                     window_end -= 1;
                 }
 
+                let has_leading = window_start > 0;
+                let has_trailing = window_end < bytes.len();
+                let estimated_cap = (window_end - window_start)
+                    + 3 * has_leading as usize
+                    + 3 * has_trailing as usize;
+
                 // Truncate the window to fit within MAX_LINE_LENGTH, preserving character boundaries.
-                let mut truncated = String::new();
-                if window_start > 0 {
+                let mut truncated = String::with_capacity(estimated_cap);
+                if has_leading {
                     truncated.push_str("...");
                 }
                 truncated.push_str(&String::from_utf8_lossy(&bytes[window_start..window_end]));
-                if window_end < bytes.len() {
+                if has_trailing {
                     truncated.push_str("...");
                 }
 
@@ -126,7 +132,8 @@ impl searcher::Sink for SearchSink<'_> {
                 while end > 0 && end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
                     end -= 1;
                 }
-                let mut truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
+                let mut truncated = String::with_capacity(end + 3);
+                truncated.push_str(&String::from_utf8_lossy(&bytes[..end]));
                 truncated.push_str("...");
                 (truncated.into(), Vec::new().into())
             }
