@@ -55,14 +55,14 @@ impl searcher::SinkError for SearchError {
 
 /// The Sink is the "callback" object.
 /// It gets called whenever a match is found in a file.
-struct SearchSink<'a, 'm> {
+struct SearchSink<'a> {
     /// Accumulates results found during the scan of a single file.
     results: &'a mut Vec<SearchEntry>,
     /// The matcher used to find the exact byte offsets of multiple terms.
-    matcher: &'m RegexMatcher,
+    matcher: &'a RegexMatcher,
 }
 
-impl searcher::Sink for SearchSink<'_, '_> {
+impl searcher::Sink for SearchSink<'_> {
     type Error = SearchError;
 
     /// Called by the searcher when a line matches the regex.
@@ -343,82 +343,79 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 };
 
                 let path = entry.path();
-                let path_text: Arc<str> = path.to_string_lossy().into();
 
                 // First pass: check if the path itself matches the query.
                 let mut path_matches = Vec::new();
-                let mut at = 0;
-                while let Ok(Some(m)) = matcher.find_at(path_text.as_bytes(), at) {
-                    path_matches.push((m.start(), m.end()));
-                    at = m.end();
+                if let Some(path_str) = path.to_str() {
+                    let mut at = 0;
+                    while let Ok(Some(m)) = matcher.find_at(path_str.as_bytes(), at) {
+                        path_matches.push((m.start(), m.end()));
+                        at = m.end();
+                    }
                 }
 
                 // Second pass: scan file content (unless "File name only" mode is on).
                 let mut entries = Vec::new();
                 if mode != SearchMode::FileNameOnly {
                     let mut handled = false;
-                    let extension = path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
 
-                    if mode == SearchMode::IncludeDocContent {
-                        match extension.as_str() {
-                            "docx" | "pptx" | "xlsx" | "doc" | "ppt" | "xls" => {
-                                if let Ok(text) = office_oxide::extract_text(path) {
+                    if mode == SearchMode::IncludeDocContent
+                        && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                    {
+                        if ext.eq_ignore_ascii_case("docx")
+                            || ext.eq_ignore_ascii_case("xlsx")
+                            || ext.eq_ignore_ascii_case("pptx")
+                            || ext.eq_ignore_ascii_case("doc")
+                            || ext.eq_ignore_ascii_case("ppt")
+                            || ext.eq_ignore_ascii_case("xls")
+                        {
+                            if let Ok(text) = office_oxide::extract_text(path) {
+                                let mut sink = SearchSink {
+                                    results: &mut entries,
+                                    matcher: &matcher,
+                                };
+                                let _ =
+                                    searcher.search_slice(&*matcher, text.as_bytes(), &mut sink);
+                                handled = true;
+                            }
+                        } else if ext.eq_ignore_ascii_case("pdf") {
+                            if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
+                                let mut full_pdf_text = String::new();
+                                let mut page = 0;
+                                while let Ok(page_text) = doc.extract_text(page) {
+                                    if page_text.is_empty() && page > 0 {
+                                        break;
+                                    }
+                                    full_pdf_text.push_str(&page_text);
+                                    full_pdf_text.push('\n');
+                                    page += 1;
+                                }
+                                if !full_pdf_text.is_empty() {
                                     let mut sink = SearchSink {
                                         results: &mut entries,
                                         matcher: &matcher,
                                     };
                                     let _ = searcher.search_slice(
                                         &*matcher,
-                                        text.as_bytes(),
+                                        full_pdf_text.as_bytes(),
                                         &mut sink,
                                     );
                                     handled = true;
                                 }
                             }
-                            "pdf" => {
-                                if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
-                                    let mut full_pdf_text = String::new();
-                                    let mut page = 0;
-                                    while let Ok(page_text) = doc.extract_text(page) {
-                                        full_pdf_text.push_str(&page_text);
-                                        full_pdf_text.push('\n');
-                                        page += 1;
-                                    }
-                                    if !full_pdf_text.is_empty() {
-                                        let mut sink = SearchSink {
-                                            results: &mut entries,
-                                            matcher: &matcher,
-                                        };
-                                        let _ = searcher.search_slice(
-                                            &*matcher,
-                                            full_pdf_text.as_bytes(),
-                                            &mut sink,
-                                        );
-                                        handled = true;
-                                    }
-                                }
-                            }
-                            "eml" => {
-                                // Korean .eml files often use Quoted-Printable encoding for the body.
-                                if let Ok(content) = std::fs::read(path)
-                                    && let Ok(decoded) = quoted_printable::decode(
-                                        &content,
-                                        quoted_printable::ParseMode::Robust,
-                                    )
-                                {
-                                    let mut sink = SearchSink {
-                                        results: &mut entries,
-                                        matcher: &matcher,
-                                    };
-                                    let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
-                                    handled = true;
-                                }
-                            }
-                            _ => {}
+                        } else if ext.eq_ignore_ascii_case("eml")
+                            && let Ok(content) = std::fs::read(path)
+                            && let Ok(decoded) = quoted_printable::decode(
+                                &content,
+                                quoted_printable::ParseMode::Robust,
+                            )
+                        {
+                            let mut sink = SearchSink {
+                                results: &mut entries,
+                                matcher: &matcher,
+                            };
+                            let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
+                            handled = true;
                         }
                     }
 
@@ -434,6 +431,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
 
                 // If anything matched (name or content), send it to the UI.
                 if !entries.is_empty() || !path_matches.is_empty() {
+                    let path_text: Arc<str> = path.to_string_lossy().into();
                     let modified_at = entry.metadata().ok().and_then(|m| m.modified().ok());
                     let _ = tx.send(SearchResult {
                         path: path_text,
