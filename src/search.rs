@@ -60,6 +60,8 @@ struct SearchSink<'a> {
     results: &'a mut Vec<SearchEntry>,
     /// The matcher used to find the exact byte offsets of multiple terms.
     matcher: &'a RegexMatcher,
+    /// Atomic flag to signal worker threads to stop early.
+    quit: Arc<AtomicBool>,
 }
 
 impl searcher::Sink for SearchSink<'_> {
@@ -67,21 +69,30 @@ impl searcher::Sink for SearchSink<'_> {
 
     /// Called by the searcher when a line matches the regex.
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        // Check if user cancelled the search even during file scan.
+        if self.quit.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+
         let line_number = mat.line_number().unwrap_or(0);
         let bytes = mat.bytes();
 
         // The grep crate tells us the line matches, but not where all the terms are.
         // Do a second pass here to find all match offsets (for highlighting in UI).
+        // Limit to 5 matches per line to prevent performance degradation.
         let mut all_matches = Vec::new();
         let mut at = 0;
         while let Ok(Some(m)) = self.matcher.find_at(bytes, at) {
             all_matches.push((m.start(), m.end()));
             at = m.end();
+            if all_matches.len() >= 5 {
+                break;
+            }
         }
 
         // Logic for handling extremely long lines (like log files or minified JS).
         // Center the view around the first match to keep the UI snappy.
-        const MAX_LINE_LENGTH: usize = 256;
+        const MAX_LINE_LENGTH: usize = 128;
         let (display_text, display_matches) = if bytes.len() > MAX_LINE_LENGTH {
             if let Some(&(m_start, _)) = all_matches.first() {
                 // Calculate a window around the first match.
@@ -270,11 +281,7 @@ impl SearchConfig {
     /// Scan for all words in a single pass.
     fn create_matcher(&self) -> Result<RegexMatcher> {
         let mut builder = RegexMatcherBuilder::new();
-        builder
-            .case_smart(true)
-            .case_insensitive(true)
-            .multi_line(true)
-            .unicode(true);
+        builder.case_smart(true).unicode(true);
 
         let literals: Vec<String> = self
             .queries
@@ -347,14 +354,14 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 let entry = match result {
                     Ok(e) if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) => e,
                     Ok(e) if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) => {
-                        if let Some(path_str) = e.path().to_str() {
-                            let path_lower = path_str.to_lowercase();
-                            if path_lower.contains(":\\windows")
-                                || path_lower.contains("program files")
-                                || path_lower.contains("appdata\\local\\temp")
-                                || path_lower.contains("\\.git")
-                            {
-                                return WalkState::Skip;
+                        let path = e.path();
+                        if let Some(path_str) = path.to_str() {
+                            // Check for system directories without to_lowercase()
+                            if path_str.len() >= 10 {
+                                let prefix = &path_str[..10].to_ascii_lowercase();
+                                if prefix == "c:\\windows" || prefix == "c:\\program " {
+                                    return WalkState::Skip;
+                                }
                             }
                         }
                         return WalkState::Continue;
@@ -383,12 +390,17 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 if mode == SearchMode::FileNameOnly {
                     if !path_matches.is_empty() {
                         let path_text: Arc<str> = path.to_string_lossy().into();
-                        let _ = tx.send(SearchResult {
-                            path: path_text,
-                            path_matches: path_matches.into(),
-                            entries,
-                            modified_at: None,
-                        });
+                        if tx
+                            .send(SearchResult {
+                                path: path_text,
+                                path_matches: path_matches.into(),
+                                entries,
+                                modified_at: None,
+                            })
+                            .is_err()
+                        {
+                            return WalkState::Quit;
+                        }
                     }
                     return WalkState::Continue;
                 }
@@ -405,6 +417,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     let mut sink = SearchSink {
                                         results: &mut entries,
                                         matcher: &matcher,
+                                        quit: quit.clone(),
                                     };
                                     let _ = searcher.search_slice(
                                         &*matcher,
@@ -439,6 +452,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                 let mut sink = SearchSink {
                                     results: &mut entries,
                                     matcher: &matcher,
+                                    quit: quit.clone(),
                                 };
                                 let _ = searcher.search_slice(
                                     &*matcher,
@@ -466,6 +480,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                         let mut sink = SearchSink {
                                             results: &mut entries,
                                             matcher: &matcher,
+                                            quit: quit.clone(),
                                         };
                                         let _ =
                                             searcher.search_slice(&*matcher, &decoded, &mut sink);
@@ -498,6 +513,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                     let sink = SearchSink {
                         results: &mut entries,
                         matcher: &matcher,
+                        quit: quit.clone(),
                     };
                     // The actual heavy lifting: disk I/O and regex scanning.
                     if let Err(search_err) = searcher.search_path(&*matcher, path, sink) {
@@ -513,12 +529,17 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 if !entries.is_empty() || !path_matches.is_empty() {
                     let path_text: Arc<str> = path.to_string_lossy().into();
                     let modified_at = entry.metadata().ok().and_then(|m| m.modified().ok());
-                    let _ = tx.send(SearchResult {
-                        path: path_text,
-                        path_matches: path_matches.into(),
-                        entries,
-                        modified_at,
-                    });
+                    if tx
+                        .send(SearchResult {
+                            path: path_text,
+                            path_matches: path_matches.into(),
+                            entries,
+                            modified_at,
+                        })
+                        .is_err()
+                    {
+                        return WalkState::Quit;
+                    }
                 }
                 WalkState::Continue
             })
