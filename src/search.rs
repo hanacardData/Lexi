@@ -201,14 +201,31 @@ impl SearchQuery {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    #[default]
+    PathAndContent,
+    FileNameOnly,
+    IncludeDocContent,
+}
+
+impl SearchMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SearchMode::FileNameOnly => "파일명만",
+            SearchMode::PathAndContent => "파일명 + 텍스트",
+            SearchMode::IncludeDocContent => "파일명 + 텍스트 + 문서내용",
+        }
+    }
+}
+
 /// Full configuration for a search operation.
 #[derive(Debug, Clone, Default)]
 pub struct SearchConfig {
     pub paths: Vec<String>,
     pub patterns: String,
     pub queries: Vec<SearchQuery>,
-    pub file_name_only: bool,
-    pub search_doc_content: bool,
+    pub mode: SearchMode,
 }
 
 impl SearchConfig {
@@ -218,8 +235,7 @@ impl SearchConfig {
             paths,
             patterns,
             queries: vec![SearchQuery::new()],
-            file_name_only: false,
-            search_doc_content: false,
+            mode: SearchMode::PathAndContent,
         }
     }
 
@@ -274,8 +290,7 @@ impl SearchConfig {
 pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
     // Create variables for the search configuration.
     let matcher = config.create_matcher()?;
-    let file_name_only = config.file_name_only;
-    let search_doc_content = config.search_doc_content;
+    let mode = config.mode;
     let paths = config.paths();
     if paths.is_empty() {
         bail!("No search paths provided");
@@ -338,9 +353,9 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                     at = m.end();
                 }
 
-                let mut entries = Vec::new();
                 // Second pass: scan file content (unless "File name only" mode is on).
-                if !file_name_only {
+                let mut entries = Vec::new();
+                if mode != SearchMode::FileNameOnly {
                     let mut handled = false;
                     let extension = path
                         .extension()
@@ -348,7 +363,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                         .unwrap_or("")
                         .to_lowercase();
 
-                    if search_doc_content {
+                    if mode == SearchMode::IncludeDocContent {
                         match extension.as_str() {
                             "docx" | "pptx" | "xlsx" | "doc" | "ppt" | "xls" => {
                                 if let Ok(text) = office_oxide::extract_text(path) {
