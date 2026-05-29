@@ -7,7 +7,7 @@ fn test_deferred_panic_logging() {
     log_path.set_extension("log");
 
     if log_path.as_os_str().is_empty() {
-        log_path = std::path::PathBuf::from("lexi.log");
+        log_path = std::path::PathBuf::from("LEXI.log");
     }
 
     if log_path.exists() {

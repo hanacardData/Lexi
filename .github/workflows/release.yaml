@@ -23,7 +23,10 @@ jobs:
       - name: Build Release
         run: cargo build --release
 
+      - name: Rename executable
+        run: Move-Item -Path "target/release/lexi.exe" -Destination "target/release/LEXI.exe"
+
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
-          files: target/release/lexi.exe
+          files: target/release/LEXI.exe

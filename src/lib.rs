@@ -16,7 +16,7 @@ pub fn setup_logging() {
 
         // If we can't get the executable path, use a default name.
         if log_path.as_os_str().is_empty() {
-            log_path = std::path::PathBuf::from("lexi.log");
+            log_path = std::path::PathBuf::from("LEXI.log");
         }
 
         // Only create the logger and file when a panic occurs.

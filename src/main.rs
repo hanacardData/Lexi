@@ -56,7 +56,7 @@ fn main() -> eframe::Result {
     // Configure the main window options.
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1024.0, 768.0])
-        .with_title("Lexi");
+        .with_title("LEXI");
 
     if let Some(icon) = icon {
         let (width, height) = icon.dimensions();
@@ -74,7 +74,7 @@ fn main() -> eframe::Result {
 
     // Start the eframe application loop.
     eframe::run_native(
-        "lexi",
+        "LEXI",
         options,
         Box::new(|cc| {
             // Need custom fonts to correctly display Korean characters on Windows.
