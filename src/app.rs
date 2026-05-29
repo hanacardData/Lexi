@@ -535,7 +535,7 @@ impl SearchApp {
             let mut should_cancel = false;
             for query in &mut tab.config.queries {
                 ui.horizontal(|ui| {
-                    ui.label("검색어: ");
+                    ui.label(egui::RichText::new("검색어: ").strong());
                     let remaining_width = ui.available_width() - 300.0;
                     if ui
                         .add(
