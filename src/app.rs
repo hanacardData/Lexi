@@ -143,6 +143,8 @@ pub struct SearchTab {
     last_input_time: Option<Instant>,
     /// Sorting state.
     sort_by_modified_asc: bool,
+    /// Last time the results were sorted.
+    last_sort_time: Instant,
 }
 
 impl Default for SearchTab {
@@ -157,6 +159,7 @@ impl Default for SearchTab {
             error_message: None,
             last_input_time: None,
             sort_by_modified_asc: false,
+            last_sort_time: Instant::now(),
         }
     }
 }
@@ -238,13 +241,17 @@ impl SearchTab {
         }
 
         // Convert the raw SearchResult into UI-ready entries.
+        let had_new_results = !new_results.is_empty();
         for result in new_results {
             self.save_results(ui, result);
         }
 
-        // Sort whenever get new data.
-        if !is_done || !self.results.is_empty() {
+        // Sort results only when the search is finished or at most twice per second.
+        if is_done
+            || (had_new_results && self.last_sort_time.elapsed() > Duration::from_millis(500))
+        {
             self.sort_results();
+            self.last_sort_time = Instant::now();
         }
 
         // Remove the pending search if we're done.
