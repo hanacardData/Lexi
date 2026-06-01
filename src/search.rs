@@ -432,28 +432,65 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                         }
                         "pdf" => match pdf_oxide::PdfDocument::open(path) {
                             Ok(doc) => {
-                                let mut full_pdf_text = String::new();
-
                                 if let Ok(total_pages) = doc.page_count() {
+                                    let path_text: Arc<str> = path.to_string_lossy().into();
+                                    let modified_at =
+                                        entry.metadata().ok().and_then(|m| m.modified().ok());
+
+                                    let path_matches_arc: Arc<[(usize, usize)]> =
+                                        Arc::from(path_matches.as_slice());
+                                    let mut reported_any = false;
+
                                     for page in 0..total_pages {
+                                        if quit.load(Ordering::Relaxed) {
+                                            return WalkState::Quit;
+                                        }
                                         if let Ok(page_text) = doc.extract_text(page) {
-                                            full_pdf_text.push_str(&page_text);
-                                            full_pdf_text.push('\n');
+                                            let mut page_entries = Vec::new();
+                                            let mut sink = SearchSink {
+                                                results: &mut page_entries,
+                                                matcher: &matcher,
+                                                quit: quit.clone(),
+                                            };
+                                            let _ = searcher.search_slice(
+                                                &*matcher,
+                                                page_text.as_bytes(),
+                                                &mut sink,
+                                            );
+
+                                            if !page_entries.is_empty() {
+                                                if tx
+                                                    .send(SearchResult {
+                                                        path: Arc::clone(&path_text),
+                                                        path_matches: Arc::clone(&path_matches_arc),
+                                                        entries: page_entries,
+                                                        modified_at,
+                                                    })
+                                                    .is_err()
+                                                {
+                                                    return WalkState::Quit;
+                                                }
+                                                reported_any = true;
+                                            }
+                                        }
+                                    }
+
+                                    // If the path matched but no content was found, report the path match now.
+                                    if !reported_any && !path_matches.is_empty() {
+                                        if tx
+                                            .send(SearchResult {
+                                                path: path_text,
+                                                path_matches: path_matches_arc,
+                                                entries: Vec::new(),
+                                                modified_at,
+                                            })
+                                            .is_err()
+                                        {
+                                            return WalkState::Quit;
                                         }
                                     }
                                 }
-
-                                let mut sink = SearchSink {
-                                    results: &mut entries,
-                                    matcher: &matcher,
-                                    quit: quit.clone(),
-                                };
-                                let _ = searcher.search_slice(
-                                    &*matcher,
-                                    full_pdf_text.as_bytes(),
-                                    &mut sink,
-                                );
-                                handled = true;
+                                return WalkState::Continue;
                             }
                             Err(err) => {
                                 log::warn!(
@@ -461,7 +498,7 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     path.display(),
                                     err
                                 );
-                                handled = true;
+                                return WalkState::Continue;
                             }
                         },
                         "eml" => match std::fs::read(path) {
