@@ -476,8 +476,9 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     }
 
                                     // If the path matched but no content was found, report the path match now.
-                                    if !reported_any && !path_matches.is_empty() {
-                                        if tx
+                                    if !reported_any
+                                        && !path_matches.is_empty()
+                                        && tx
                                             .send(SearchResult {
                                                 path: path_text,
                                                 path_matches: path_matches_arc,
@@ -485,9 +486,8 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                                 modified_at,
                                             })
                                             .is_err()
-                                        {
-                                            return WalkState::Quit;
-                                        }
+                                    {
+                                        return WalkState::Quit;
                                     }
                                 }
                                 return WalkState::Continue;
