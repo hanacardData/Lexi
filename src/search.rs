@@ -264,17 +264,21 @@ impl SearchConfig {
 
     /// Parses the pattern string (e.g., "*.rs *.md") into a glob override object.
     pub fn overrides(&self) -> Override {
-        if self.patterns.is_empty() {
-            Override::empty()
-        } else {
-            let mut builder = OverrideBuilder::new(
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            );
+        let mut builder = OverrideBuilder::new("/");
+
+        // Add default excludes for Windows system directories to improve performance.
+        if cfg!(target_os = "windows") {
+            let _ = builder.add("!C:/Windows/**");
+            let _ = builder.add("!C:/Program Files/**");
+            let _ = builder.add("!C:/Program Files (x86)/**");
+        }
+
+        if !self.patterns.is_empty() {
             for glob in self.patterns.split_whitespace() {
                 let _ = builder.add(glob);
             }
-            builder.build().unwrap_or_else(|_| Override::empty())
         }
+        builder.build().unwrap_or_else(|_| Override::empty())
     }
 
     /// Creates a combined Regex matcher from all search terms.
@@ -354,16 +358,6 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                 let entry = match result {
                     Ok(e) if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) => e,
                     Ok(e) if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) => {
-                        let path = e.path();
-                        if let Some(path_str) = path.to_str() {
-                            // Check for system directories without to_lowercase()
-                            if path_str.len() >= 10 {
-                                let prefix = &path_str[..10].to_ascii_lowercase();
-                                if prefix == "c:\\windows" || prefix == "c:\\program " {
-                                    return WalkState::Skip;
-                                }
-                            }
-                        }
                         return WalkState::Continue;
                     }
                     Err(walk_err) => {
