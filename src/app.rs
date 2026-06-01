@@ -143,6 +143,8 @@ pub struct SearchTab {
     last_input_time: Option<Instant>,
     /// Sorting state.
     sort_by_modified_asc: bool,
+    /// Last time the results were sorted.
+    last_sort_time: Instant,
 }
 
 impl Default for SearchTab {
@@ -157,6 +159,7 @@ impl Default for SearchTab {
             error_message: None,
             last_input_time: None,
             sort_by_modified_asc: false,
+            last_sort_time: Instant::now(),
         }
     }
 }
@@ -238,13 +241,17 @@ impl SearchTab {
         }
 
         // Convert the raw SearchResult into UI-ready entries.
+        let had_new_results = !new_results.is_empty();
         for result in new_results {
             self.save_results(ui, result);
         }
 
-        // Sort whenever get new data.
-        if !is_done || !self.results.is_empty() {
+        // Sort results only when the search is finished or at most twice per second.
+        if is_done
+            || (had_new_results && self.last_sort_time.elapsed() > Duration::from_millis(500))
+        {
             self.sort_results();
+            self.last_sort_time = Instant::now();
         }
 
         // Remove the pending search if we're done.
@@ -426,8 +433,14 @@ impl SearchApp {
 
     /// Renders the inputs for paths, patterns, and search terms.
     fn draw_search_controls(&mut self, ui: &mut egui::Ui, tab_index: usize) -> bool {
-        let mut input_changed = false;
         let tab = &mut self.tabs[tab_index];
+
+        // Store old values to detect changes.
+        let old_patterns = tab.config.patterns.clone();
+        let old_mode = tab.config.mode;
+        let old_queries: Vec<String> = tab.config.queries.iter().map(|q| q.query.clone()).collect();
+        let old_paths_len = tab.config.paths.len();
+        let mut path_removed_or_picked = false;
 
         ui.vertical(|ui| {
             // Path chips management.
@@ -470,12 +483,12 @@ impl SearchApp {
                     // Remove path chip.
                     if let Some(i) = path_to_remove {
                         tab.config.paths.remove(i);
-                        input_changed = true;
+                        path_removed_or_picked = true;
                     }
 
                     // Add path picker.
                     if open_picker && Self::pick_paths(&mut tab.config) {
-                        input_changed = true;
+                        path_removed_or_picked = true;
                     }
                 });
             });
@@ -486,47 +499,33 @@ impl SearchApp {
             ui.horizontal(|ui| {
                 ui.label("파일패턴:");
                 let remaining_width = ui.available_width() - 300.0;
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut tab.config.patterns)
-                            .desired_width(remaining_width)
-                            .hint_text("예시: *.pdf (PDF 파일만 검색) *.{pdf,csv} (PDF, CSV 파일만 검색) !dir/ (dir 폴더 제외)"),
-                    )
-                    .changed()
-                {
-                    input_changed = true;
-                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut tab.config.patterns)
+                        .desired_width(remaining_width)
+                        .hint_text("예시: *.pdf (PDF 파일만 검색) *.{pdf,csv} (PDF, CSV 파일만 검색) !dir/ (dir 폴더 제외)"),
+                );
 
                 let combo_id = ui.id().with("search_mode_combo").with(tab_index);
-                let combo_res = egui::ComboBox::from_id_salt(combo_id)
+                egui::ComboBox::from_id_salt(combo_id)
                     .selected_text(tab.config.mode.label())
                     .width(180.0)
                     .show_ui(ui, |ui| {
-                        let mut sub_changed = false;
-
-                        sub_changed |= ui.selectable_value(
+                        ui.selectable_value(
                             &mut tab.config.mode,
                             SearchMode::FileNameOnly,
                             SearchMode::FileNameOnly.label()
-                        ).changed();
-
-                        sub_changed |= ui.selectable_value(
+                        );
+                        ui.selectable_value(
                             &mut tab.config.mode,
                             SearchMode::PathAndContent,
                             SearchMode::PathAndContent.label()
-                        ).changed();
-
-                        sub_changed |= ui.selectable_value(
+                        );
+                        ui.selectable_value(
                             &mut tab.config.mode,
                             SearchMode::IncludeDocContent,
                             SearchMode::IncludeDocContent.label()
-                        ).changed();
-
-                        sub_changed
+                        );
                     });
-                if let Some(true) = combo_res.inner {
-                    input_changed = true;
-                }
             });
 
             ui.add_space(5.0);
@@ -537,16 +536,11 @@ impl SearchApp {
                 ui.horizontal(|ui| {
                     ui.label("검색어:");
                     let remaining_width = ui.available_width() - 300.0;
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut query.query)
-                                .desired_width(remaining_width)
-                                .hint_text("예시: text"),
-                        )
-                        .changed()
-                    {
-                        input_changed = true;
-                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut query.query)
+                            .desired_width(remaining_width)
+                            .hint_text("예시: text"),
+                    );
                     if ui
                         .button("검색중지")
                         .on_hover_text("검색을 중지합니다. (Esc)")
@@ -562,7 +556,13 @@ impl SearchApp {
             }
         });
 
-        input_changed
+        let new_queries: Vec<String> = tab.config.queries.iter().map(|q| q.query.clone()).collect();
+
+        path_removed_or_picked
+            || old_patterns != tab.config.patterns
+            || old_mode != tab.config.mode
+            || old_queries != new_queries
+            || old_paths_len != tab.config.paths.len()
     }
 
     /// Renders the bottom status bar with search stats and timing.
@@ -578,6 +578,8 @@ impl SearchApp {
                 ui.label("대기중: ");
             } else if tab.file_searched > 0 {
                 ui.colored_label(egui::Color32::DARK_GREEN, "✅ 완료: ");
+            } else if tab.results.len() >= 10000 {
+                ui.colored_label(egui::Color32::RED, "결과가 많아 일부만 출력합니다.");
             }
 
             let duration = tab.search_duration();
@@ -629,7 +631,7 @@ impl SearchApp {
                 });
             })
             .body(|body| {
-                body.rows(text_height, tab.results.len(), |mut row| {
+                body.rows(text_height, 10000.min(tab.results.len()), |mut row| {
                     let row_index = row.index();
                     let entry = &tab.results[row_index];
 

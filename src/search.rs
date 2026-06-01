@@ -55,33 +55,44 @@ impl searcher::SinkError for SearchError {
 
 /// The Sink is the "callback" object.
 /// It gets called whenever a match is found in a file.
-struct SearchSink<'a, 'm> {
+struct SearchSink<'a> {
     /// Accumulates results found during the scan of a single file.
     results: &'a mut Vec<SearchEntry>,
     /// The matcher used to find the exact byte offsets of multiple terms.
-    matcher: &'m RegexMatcher,
+    matcher: &'a RegexMatcher,
+    /// Atomic flag to signal worker threads to stop early.
+    quit: Arc<AtomicBool>,
 }
 
-impl searcher::Sink for SearchSink<'_, '_> {
+impl searcher::Sink for SearchSink<'_> {
     type Error = SearchError;
 
     /// Called by the searcher when a line matches the regex.
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        // Check if user cancelled the search even during file scan.
+        if self.quit.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+
         let line_number = mat.line_number().unwrap_or(0);
         let bytes = mat.bytes();
 
         // The grep crate tells us the line matches, but not where all the terms are.
         // Do a second pass here to find all match offsets (for highlighting in UI).
+        // Limit to 5 matches per line to prevent performance degradation.
         let mut all_matches = Vec::new();
         let mut at = 0;
         while let Ok(Some(m)) = self.matcher.find_at(bytes, at) {
             all_matches.push((m.start(), m.end()));
             at = m.end();
+            if all_matches.len() >= 5 {
+                break;
+            }
         }
 
         // Logic for handling extremely long lines (like log files or minified JS).
         // Center the view around the first match to keep the UI snappy.
-        const MAX_LINE_LENGTH: usize = 1024;
+        const MAX_LINE_LENGTH: usize = 128;
         let (display_text, display_matches) = if bytes.len() > MAX_LINE_LENGTH {
             if let Some(&(m_start, _)) = all_matches.first() {
                 // Calculate a window around the first match.
@@ -102,13 +113,19 @@ impl searcher::Sink for SearchSink<'_, '_> {
                     window_end -= 1;
                 }
 
+                let has_leading = window_start > 0;
+                let has_trailing = window_end < bytes.len();
+                let estimated_cap = (window_end - window_start)
+                    + 3 * has_leading as usize
+                    + 3 * has_trailing as usize;
+
                 // Truncate the window to fit within MAX_LINE_LENGTH, preserving character boundaries.
-                let mut truncated = String::new();
-                if window_start > 0 {
+                let mut truncated = String::with_capacity(estimated_cap);
+                if has_leading {
                     truncated.push_str("...");
                 }
                 truncated.push_str(&String::from_utf8_lossy(&bytes[window_start..window_end]));
-                if window_end < bytes.len() {
+                if has_trailing {
                     truncated.push_str("...");
                 }
 
@@ -126,7 +143,8 @@ impl searcher::Sink for SearchSink<'_, '_> {
                 while end > 0 && end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
                     end -= 1;
                 }
-                let mut truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
+                let mut truncated = String::with_capacity(end + 3);
+                truncated.push_str(&String::from_utf8_lossy(&bytes[..end]));
                 truncated.push_str("...");
                 (truncated.into(), Vec::new().into())
             }
@@ -246,28 +264,28 @@ impl SearchConfig {
 
     /// Parses the pattern string (e.g., "*.rs *.md") into a glob override object.
     pub fn overrides(&self) -> Override {
-        if self.patterns.is_empty() {
-            Override::empty()
-        } else {
-            let mut builder = OverrideBuilder::new(
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            );
+        let mut builder = OverrideBuilder::new("/");
+
+        // Add default excludes for Windows system directories to improve performance.
+        if cfg!(target_os = "windows") {
+            let _ = builder.add("!C:/Windows/**");
+            let _ = builder.add("!C:/Program Files/**");
+            let _ = builder.add("!C:/Program Files (x86)/**");
+        }
+
+        if !self.patterns.is_empty() {
             for glob in self.patterns.split_whitespace() {
                 let _ = builder.add(glob);
             }
-            builder.build().unwrap_or_else(|_| Override::empty())
         }
+        builder.build().unwrap_or_else(|_| Override::empty())
     }
 
     /// Creates a combined Regex matcher from all search terms.
     /// Scan for all words in a single pass.
     fn create_matcher(&self) -> Result<RegexMatcher> {
         let mut builder = RegexMatcherBuilder::new();
-        builder
-            .case_smart(true)
-            .case_insensitive(true)
-            .multi_line(true)
-            .unicode(true);
+        builder.case_smart(true).unicode(true);
 
         let literals: Vec<String> = self
             .queries
@@ -339,37 +357,61 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
 
                 let entry = match result {
                     Ok(e) if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) => e,
+                    Ok(e) if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) => {
+                        return WalkState::Continue;
+                    }
+                    Err(walk_err) => {
+                        log::warn!("Skipping entry: {}", walk_err);
+                        return WalkState::Continue;
+                    }
                     _ => return WalkState::Continue,
                 };
 
                 let path = entry.path();
-                let path_text: Arc<str> = path.to_string_lossy().into();
 
                 // First pass: check if the path itself matches the query.
                 let mut path_matches = Vec::new();
-                let mut at = 0;
-                while let Ok(Some(m)) = matcher.find_at(path_text.as_bytes(), at) {
-                    path_matches.push((m.start(), m.end()));
-                    at = m.end();
+                if let Some(path_str) = path.to_str() {
+                    let mut at = 0;
+                    while let Ok(Some(m)) = matcher.find_at(path_str.as_bytes(), at) {
+                        path_matches.push((m.start(), m.end()));
+                        at = m.end();
+                    }
                 }
 
                 // Second pass: scan file content (unless "File name only" mode is on).
                 let mut entries = Vec::new();
-                if mode != SearchMode::FileNameOnly {
-                    let mut handled = false;
-                    let extension = path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                if mode == SearchMode::FileNameOnly {
+                    if !path_matches.is_empty() {
+                        let path_text: Arc<str> = path.to_string_lossy().into();
+                        if tx
+                            .send(SearchResult {
+                                path: path_text,
+                                path_matches: path_matches.into(),
+                                entries,
+                                modified_at: None,
+                            })
+                            .is_err()
+                        {
+                            return WalkState::Quit;
+                        }
+                    }
+                    return WalkState::Continue;
+                }
 
-                    if mode == SearchMode::IncludeDocContent {
-                        match extension.as_str() {
-                            "docx" | "pptx" | "xlsx" | "doc" | "ppt" | "xls" => {
-                                if let Ok(text) = office_oxide::extract_text(path) {
+                let mut handled = false;
+                if mode == SearchMode::IncludeDocContent
+                    && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                {
+                    let ext_lower = ext.to_ascii_lowercase();
+                    match ext_lower.as_str() {
+                        "docx" | "xlsx" | "pptx" | "doc" | "ppt" | "xls" => {
+                            match office_oxide::extract_text(path) {
+                                Ok(text) => {
                                     let mut sink = SearchSink {
                                         results: &mut entries,
                                         matcher: &matcher,
+                                        quit: quit.clone(),
                                     };
                                     let _ = searcher.search_slice(
                                         &*matcher,
@@ -378,69 +420,157 @@ pub fn spawn_search(config: &SearchConfig) -> Result<PendingSearch> {
                                     );
                                     handled = true;
                                 }
+                                Err(err) => {
+                                    log::warn!(
+                                        "Failed to load DOCX/XLSX/PPTX file: {}, error: {}",
+                                        path.display(),
+                                        err
+                                    );
+                                    handled = true;
+                                }
                             }
-                            "pdf" => {
-                                if let Ok(doc) = pdf_oxide::PdfDocument::open(path) {
-                                    let mut full_pdf_text = String::new();
-                                    let mut page = 0;
-                                    while let Ok(page_text) = doc.extract_text(page) {
-                                        full_pdf_text.push_str(&page_text);
-                                        full_pdf_text.push('\n');
-                                        page += 1;
+                        }
+                        "pdf" => match pdf_oxide::PdfDocument::open(path) {
+                            Ok(doc) => {
+                                if let Ok(total_pages) = doc.page_count() {
+                                    let path_text: Arc<str> = path.to_string_lossy().into();
+                                    let modified_at =
+                                        entry.metadata().ok().and_then(|m| m.modified().ok());
+
+                                    let path_matches_arc: Arc<[(usize, usize)]> =
+                                        Arc::from(path_matches.as_slice());
+                                    let mut reported_any = false;
+
+                                    for page in 0..total_pages {
+                                        if quit.load(Ordering::Relaxed) {
+                                            return WalkState::Quit;
+                                        }
+                                        if let Ok(page_text) = doc.extract_text(page) {
+                                            let mut page_entries = Vec::new();
+                                            let mut sink = SearchSink {
+                                                results: &mut page_entries,
+                                                matcher: &matcher,
+                                                quit: quit.clone(),
+                                            };
+                                            let _ = searcher.search_slice(
+                                                &*matcher,
+                                                page_text.as_bytes(),
+                                                &mut sink,
+                                            );
+
+                                            if !page_entries.is_empty() {
+                                                if tx
+                                                    .send(SearchResult {
+                                                        path: Arc::clone(&path_text),
+                                                        path_matches: Arc::clone(&path_matches_arc),
+                                                        entries: page_entries,
+                                                        modified_at,
+                                                    })
+                                                    .is_err()
+                                                {
+                                                    return WalkState::Quit;
+                                                }
+                                                reported_any = true;
+                                            }
+                                        }
                                     }
-                                    if !full_pdf_text.is_empty() {
+
+                                    // If the path matched but no content was found, report the path match now.
+                                    if !reported_any
+                                        && !path_matches.is_empty()
+                                        && tx
+                                            .send(SearchResult {
+                                                path: path_text,
+                                                path_matches: path_matches_arc,
+                                                entries: Vec::new(),
+                                                modified_at,
+                                            })
+                                            .is_err()
+                                    {
+                                        return WalkState::Quit;
+                                    }
+                                }
+                                return WalkState::Continue;
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "Failed to load PDF file: {}, error: {}",
+                                    path.display(),
+                                    err
+                                );
+                                return WalkState::Continue;
+                            }
+                        },
+                        "eml" => match std::fs::read(path) {
+                            Ok(content) => {
+                                match quoted_printable::decode(
+                                    &content,
+                                    quoted_printable::ParseMode::Robust,
+                                ) {
+                                    Ok(decoded) => {
                                         let mut sink = SearchSink {
                                             results: &mut entries,
                                             matcher: &matcher,
+                                            quit: quit.clone(),
                                         };
-                                        let _ = searcher.search_slice(
-                                            &*matcher,
-                                            full_pdf_text.as_bytes(),
-                                            &mut sink,
+                                        let _ =
+                                            searcher.search_slice(&*matcher, &decoded, &mut sink);
+                                        handled = true;
+                                    }
+                                    Err(err) => {
+                                        log::warn!(
+                                            "Failed to decode EML file: {}, error: {}",
+                                            path.display(),
+                                            err
                                         );
                                         handled = true;
                                     }
                                 }
                             }
-                            "eml" => {
-                                // Korean .eml files often use Quoted-Printable encoding for the body.
-                                if let Ok(content) = std::fs::read(path)
-                                    && let Ok(decoded) = quoted_printable::decode(
-                                        &content,
-                                        quoted_printable::ParseMode::Robust,
-                                    )
-                                {
-                                    let mut sink = SearchSink {
-                                        results: &mut entries,
-                                        matcher: &matcher,
-                                    };
-                                    let _ = searcher.search_slice(&*matcher, &decoded, &mut sink);
-                                    handled = true;
-                                }
+                            Err(err) => {
+                                log::warn!(
+                                    "Failed to load EML file: {}, error: {}",
+                                    path.display(),
+                                    err
+                                );
+                                handled = true;
                             }
-                            _ => {}
-                        }
+                        },
+                        _ => {}
                     }
+                }
 
-                    if !handled {
-                        let sink = SearchSink {
-                            results: &mut entries,
-                            matcher: &matcher,
-                        };
-                        // The actual heavy lifting: disk I/O and regex scanning.
-                        let _ = searcher.search_path(&*matcher, path, sink);
+                if !handled {
+                    let sink = SearchSink {
+                        results: &mut entries,
+                        matcher: &matcher,
+                        quit: quit.clone(),
+                    };
+                    // The actual heavy lifting: disk I/O and regex scanning.
+                    if let Err(search_err) = searcher.search_path(&*matcher, path, sink) {
+                        log::warn!(
+                            "Failed to search path: {}, error: {:?}",
+                            path.display(),
+                            search_err
+                        );
                     }
                 }
 
                 // If anything matched (name or content), send it to the UI.
                 if !entries.is_empty() || !path_matches.is_empty() {
+                    let path_text: Arc<str> = path.to_string_lossy().into();
                     let modified_at = entry.metadata().ok().and_then(|m| m.modified().ok());
-                    let _ = tx.send(SearchResult {
-                        path: path_text,
-                        path_matches: path_matches.into(),
-                        entries,
-                        modified_at,
-                    });
+                    if tx
+                        .send(SearchResult {
+                            path: path_text,
+                            path_matches: path_matches.into(),
+                            entries,
+                            modified_at,
+                        })
+                        .is_err()
+                    {
+                        return WalkState::Quit;
+                    }
                 }
                 WalkState::Continue
             })
