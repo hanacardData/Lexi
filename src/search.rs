@@ -222,8 +222,8 @@ impl SearchQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchMode {
     #[default]
-    PathAndContent,
     FileNameOnly,
+    PathAndContent,
     IncludeDocContent,
 }
 
@@ -253,7 +253,7 @@ impl SearchConfig {
             paths,
             patterns,
             queries: vec![SearchQuery::new()],
-            mode: SearchMode::PathAndContent,
+            mode: SearchMode::default(),
         }
     }
 

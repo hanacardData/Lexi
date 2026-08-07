@@ -53,6 +53,7 @@ fn test_search_content() {
         "".to_string(),
     );
     config.queries[0].query = "Rust".to_string();
+    config.mode = SearchMode::PathAndContent;
 
     let pending = spawn_search(&config).unwrap();
 
@@ -90,6 +91,7 @@ fn test_search_ignore_case() {
         "".to_string(),
     );
     config.queries[0].query = "case".to_string();
+    config.mode = SearchMode::PathAndContent;
 
     let pending = spawn_search(&config).unwrap();
 
@@ -121,6 +123,7 @@ fn test_search_korean_utf8() {
         "".to_string(),
     );
     config.queries[0].query = "안녕".to_string();
+    config.mode = SearchMode::PathAndContent;
 
     let pending = spawn_search(&config).unwrap();
 
