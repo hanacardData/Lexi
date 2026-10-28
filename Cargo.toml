@@ -1,6 +1,6 @@
 [package]
 name = "lexi"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 
 [dependencies]
@@ -15,11 +15,8 @@ image = "0.25.10"
 open = "5.3"
 regex = "1.12"
 rfd = "0.17"
-quoted_printable = "0.5"
 log = "0.4"
 simplelog = "0.12"
-pdf_oxide = "0.3.50"
-office_oxide = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3.10"

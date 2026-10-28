@@ -9,7 +9,7 @@ use egui::UiKind;
 use egui_extras::{Column, TableBuilder};
 use rfd::FileDialog;
 
-use crate::search::{PendingSearch, SearchConfig, SearchMode, SearchResult};
+use crate::search::{PendingSearch, SearchConfig, SearchResult};
 
 /// Main state for the entire application.
 pub struct SearchApp {
@@ -36,8 +36,6 @@ pub struct UiPathData {
 pub struct UiSearchEntry {
     /// Reference to the shared path information.
     pub path_data: Arc<UiPathData>,
-    /// The line number where the match occurred.
-    pub line_number: u64,
     /// The UI layout for the matched line (or path if it's a filename-only match).
     pub layout: egui::text::LayoutJob,
 }
@@ -134,7 +132,6 @@ pub struct SearchTab {
     pending_search: Option<PendingSearch>,
     /// Counters for UI statistics.
     file_searched: usize,
-    line_searched: usize,
     /// How long the search took (or has been taking).
     search_duration: Duration,
     /// Any critical error to show to the user.
@@ -154,7 +151,6 @@ impl Default for SearchTab {
             results: Vec::new(),
             pending_search: None,
             file_searched: 0,
-            line_searched: 0,
             search_duration: Duration::from_secs(0),
             error_message: None,
             last_input_time: None,
@@ -187,7 +183,6 @@ impl SearchTab {
         if clear_results {
             self.results.clear();
             self.file_searched = 0;
-            self.line_searched = 0;
             self.search_duration = Duration::from_secs(0);
             self.error_message = None;
         }
@@ -216,9 +211,8 @@ impl SearchTab {
                     Ok(result) => {
                         // Safety limit: stop at 10k results to prevent the app from eating all RAM.
                         if self.results.len() < 10_000 {
-                            if !result.entries.is_empty() || !result.path_matches.is_empty() {
+                            if !result.path_matches.is_empty() {
                                 self.file_searched += 1;
-                                self.line_searched += result.entries.len();
                                 new_results.push(result);
                             }
                         } else {
@@ -282,22 +276,10 @@ impl SearchTab {
             modified_at: result.modified_at,
         });
 
-        // Case: File name matches, but no content matches (or "File name only" mode).
-        if !result.path_matches.is_empty() && result.entries.is_empty() {
+        if !result.path_matches.is_empty() {
             self.results.push(UiSearchEntry {
                 path_data: Arc::clone(&path_data),
-                line_number: 0,
                 layout: path_data.path_layout.clone(),
-            });
-        }
-
-        // Case: Multiple lines matched inside the file.
-        for entry in result.entries.into_iter() {
-            let layout = UiSearchEntry::create_layout(ui, &entry.text, &entry.matches);
-            self.results.push(UiSearchEntry {
-                path_data: Arc::clone(&path_data),
-                line_number: entry.line_number,
-                layout,
             });
         }
     }
@@ -437,7 +419,6 @@ impl SearchApp {
 
         // Store old values to detect changes.
         let old_patterns = tab.config.patterns.clone();
-        let old_mode = tab.config.mode;
         let old_queries: Vec<String> = tab.config.queries.iter().map(|q| q.query.clone()).collect();
         let old_paths_len = tab.config.paths.len();
         let mut path_removed_or_picked = false;
@@ -504,28 +485,6 @@ impl SearchApp {
                         .desired_width(remaining_width)
                         .hint_text("예시: *.pdf (PDF 파일만 검색) *.{pdf,csv} (PDF, CSV 파일만 검색) !dir/ (dir 폴더 제외)"),
                 );
-
-                let combo_id = ui.id().with("search_mode_combo").with(tab_index);
-                egui::ComboBox::from_id_salt(combo_id)
-                    .selected_text(tab.config.mode.label())
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut tab.config.mode,
-                            SearchMode::FileNameOnly,
-                            SearchMode::FileNameOnly.label()
-                        );
-                        ui.selectable_value(
-                            &mut tab.config.mode,
-                            SearchMode::PathAndContent,
-                            SearchMode::PathAndContent.label()
-                        );
-                        ui.selectable_value(
-                            &mut tab.config.mode,
-                            SearchMode::IncludeDocContent,
-                            SearchMode::IncludeDocContent.label()
-                        );
-                    });
             });
 
             ui.add_space(5.0);
@@ -560,7 +519,6 @@ impl SearchApp {
 
         path_removed_or_picked
             || old_patterns != tab.config.patterns
-            || old_mode != tab.config.mode
             || old_queries != new_queries
             || old_paths_len != tab.config.paths.len()
     }
@@ -585,10 +543,7 @@ impl SearchApp {
             let duration = tab.search_duration();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label("검색어 일치:");
-                ui.label(format!(
-                    "{} 파일 / {} 라인",
-                    tab.file_searched, tab.line_searched
-                ));
+                ui.label(format!("{} 파일", tab.file_searched));
                 ui.add_space(10.0);
                 ui.label("소요시간:");
                 ui.label(format!("{:.3}초", duration.as_secs_f32()));
@@ -606,15 +561,11 @@ impl SearchApp {
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::auto().at_least(300.0).clip(true))
-            .column(Column::auto().at_least(25.0).clip(true))
             .column(Column::auto().at_least(125.0).clip(true))
             .column(Column::remainder().clip(true))
             .header(20.0, |mut header| {
                 header.col(|ui| {
                     ui.label("파일명");
-                });
-                header.col(|ui| {
-                    ui.label("라인");
                 });
                 header.col(|ui| {
                     let label = match tab.sort_by_modified_asc {
@@ -670,15 +621,6 @@ impl SearchApp {
                         }
 
                         response.on_hover_text(entry.path_data.path.as_ref());
-                    });
-
-                    // Column: Line Number
-                    row.col(|ui| {
-                        if entry.line_number > 0 {
-                            ui.label(entry.line_number.to_string());
-                        } else {
-                            ui.label("-");
-                        }
                     });
 
                     // Column: Modification Date
